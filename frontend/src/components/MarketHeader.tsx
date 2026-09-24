@@ -30,7 +30,7 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({
 
   const regime = marketStatus?.regime || 'NEUTRAL';
   const status_label = marketStatus?.status_label || 'Indian Equities Market';
-  const regime_description = marketStatus?.regime_description || 'Deterministic Decision-Support & Quantitative Swing Trading Intelligence';
+  const regime_description = marketStatus?.regime_policy?.description || 'Deterministic Decision-Support & Quantitative Swing Trading Intelligence';
   const last_updated = marketStatus?.last_updated || new Date().toISOString();
 
   const nifty = marketStatus?.nifty;
@@ -39,7 +39,7 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({
 
   // Determine regime visual styling
   const getRegimeBadge = () => {
-    switch (regime) {
+    switch (regime as string) {
       case 'STRONG_BULL':
       case 'BULL':
         return {
@@ -55,6 +55,7 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({
         };
       case 'SIDEWAYS':
       case 'RECOVERY':
+      case 'NEUTRAL':
         return {
           bg: 'bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30',
           dot: 'bg-amber-500',

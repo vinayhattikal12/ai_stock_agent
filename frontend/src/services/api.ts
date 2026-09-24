@@ -121,6 +121,14 @@ export const api = {
     return handleResponse<StockFullAnalysisResponse>(res, `Failed to fetch analysis for ${symbol}`);
   },
 
+  async analyzeStock(symbol: string): Promise<StockFullAnalysisResponse> {
+    return this.getStockAnalysis(symbol);
+  },
+
+  async getStockDetail(symbol: string): Promise<StockFullAnalysisResponse> {
+    return this.getStockAnalysis(symbol);
+  },
+
   async getPerformanceAudit(): Promise<any> {
     const res = await fetchWithRetry(`${API_BASE}/audit/performance`);
     return handleResponse<any>(res, 'Failed to fetch performance audit');

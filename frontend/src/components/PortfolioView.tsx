@@ -473,8 +473,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
           onClick={() => {
             setIsAddModalOpen(true);
             setSymbol('');
-            setQuantity(10);
-            setBuyPrice(1000);
+            setQuantityStr('10');
+            setBuyPriceStr('1000');
             setIsDropdownOpen(true);
           }}
           className="flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl font-bold text-sm bg-blue-600 hover:bg-blue-500 text-white shadow-subtle transition-all"
@@ -610,8 +610,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
               onClick={() => {
                 setIsAddModalOpen(true);
                 setSymbol('');
-                setQuantity(10);
-                setBuyPrice(1000);
+                setQuantityStr('10');
+                setBuyPriceStr('1000');
                 setIsDropdownOpen(true);
               }}
               className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-subtle"
@@ -756,8 +756,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                   {/* Footer action link */}
                   <div className="pt-2 flex justify-between items-center text-xs">
                     <span className="text-slate-500">
-                      RS vs NIFTY (20D): <strong className={h.relative_strength_20d >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
-                        {h.relative_strength_20d >= 0 ? '+' : ''}{h.relative_strength_20d}%
+                      RS vs NIFTY (20D): <strong className={(h.relative_strength_20d ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
+                        {(h.relative_strength_20d ?? 0) >= 0 ? '+' : ''}{h.relative_strength_20d ?? 0}%
                       </strong>
                     </span>
                     <button

@@ -142,7 +142,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
         // 3. Price Lines (Stop Loss, Entry, Targets) if provided
         if (levels) {
-          if (levels.stop_loss > 0) {
+          if (levels.stop_loss !== undefined && levels.stop_loss > 0) {
             candleSeries.createPriceLine({
               price: Number(levels.stop_loss),
               color: '#F43F5E',
@@ -153,7 +153,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             });
           }
 
-          if (levels.entry_high > 0) {
+          if (levels.entry_high !== undefined && levels.entry_high > 0) {
             candleSeries.createPriceLine({
               price: Number(levels.entry_high),
               color: '#3B82F6',
@@ -164,7 +164,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             });
           }
 
-          if (levels.target_1 > 0) {
+          if (levels.target_1 !== undefined && levels.target_1 > 0) {
             candleSeries.createPriceLine({
               price: Number(levels.target_1),
               color: '#10B981',
@@ -175,7 +175,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             });
           }
 
-          if (levels.target_2 > 0) {
+          if (levels.target_2 !== undefined && levels.target_2 > 0) {
             candleSeries.createPriceLine({
               price: Number(levels.target_2),
               color: '#06B6D4',
@@ -237,19 +237,19 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         {/* Level Legend */}
         {levels && (
           <div className="flex items-center space-x-3 text-xs font-mono">
-            {levels.stop_loss > 0 && (
+            {levels.stop_loss !== undefined && levels.stop_loss > 0 && (
               <div className="flex items-center space-x-1">
                 <span className="w-2.5 h-0.5 bg-rose-500 rounded"></span>
                 <span className="text-slate-500">SL: ₹{levels.stop_loss}</span>
               </div>
             )}
-            {levels.entry_high > 0 && (
+            {levels.entry_high !== undefined && levels.entry_high > 0 && (
               <div className="flex items-center space-x-1">
                 <span className="w-2.5 h-0.5 bg-blue-500 rounded"></span>
                 <span className="text-slate-500">Entry: ₹{levels.entry_high}</span>
               </div>
             )}
-            {levels.target_1 > 0 && (
+            {levels.target_1 !== undefined && levels.target_1 > 0 && (
               <div className="flex items-center space-x-1">
                 <span className="w-2.5 h-0.5 bg-emerald-500 rounded"></span>
                 <span className="text-slate-500">T1: ₹{levels.target_1}</span>

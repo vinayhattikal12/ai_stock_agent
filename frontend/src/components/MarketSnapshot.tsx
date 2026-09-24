@@ -111,7 +111,7 @@ export const MarketSnapshot: React.FC<MarketSnapshotProps> = ({ marketStatus, on
                   )}
                 </div>
                 <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                  +{(sec.change_percent || 0).toFixed(2)}%
+                  +{((sec.change_percent_1d ?? (sec as any).change_percent) || 0).toFixed(2)}%
                 </span>
               </div>
             ))}
@@ -135,7 +135,7 @@ export const MarketSnapshot: React.FC<MarketSnapshotProps> = ({ marketStatus, on
                   )}
                 </div>
                 <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
-                  {(sec.change_percent || 0).toFixed(2)}%
+                  {((sec.change_percent_1d ?? (sec as any).change_percent) || 0).toFixed(2)}%
                 </span>
               </div>
             ))}
