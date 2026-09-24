@@ -20,11 +20,18 @@ async def run_market_scan():
 async def get_latest_scan(db: Session = Depends(get_db)):
     """
     Returns the most recent scan from the database.
-    If no scan is stored yet, executes a fresh scan.
+    If the stored scan is from a previous date or empty, automatically executes a fresh live scan for today.
     """
+    from datetime import date, datetime
     latest = staged_scanner.get_scan_by_date_or_latest("latest", db=db)
-    if latest:
-        return latest
+    today = date.today()
+    if latest and latest.scan_timestamp:
+        try:
+            scan_dt = latest.scan_timestamp.date() if isinstance(latest.scan_timestamp, (date, datetime)) else datetime.fromisoformat(str(latest.scan_timestamp)).date()
+            if scan_dt == today:
+                return latest
+        except Exception:
+            pass
     return await staged_scanner.run_scan()
 
 @router.get("/history", response_model=List[HistoricalScanSummary])

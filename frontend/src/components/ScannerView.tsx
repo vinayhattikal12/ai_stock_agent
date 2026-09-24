@@ -24,7 +24,8 @@ import {
   Zap, 
   Briefcase, 
   Calendar, 
-  History 
+  History,
+  Flame 
 } from 'lucide-react';
 import { ScannerScanResponse, StockOpportunity, MarketCapCategoryResult, HistoricalScanSummary } from '../types';
 import { api } from '../services/api';
@@ -225,6 +226,17 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                   {opp.setup_type}
                 </span>
+
+                {/* Multi-Day Persistent Leader Streak Badge */}
+                {(opp.is_multi_day_runner || (opp.scan_streak_days && opp.scan_streak_days >= 2)) && (
+                  <span 
+                    title={opp.streak_description || `Appeared in Top Quantitative Setups for ${opp.scan_streak_days} consecutive days with strong institutional accumulation.`}
+                    className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 animate-pulse"
+                  >
+                    <Flame className="w-3 h-3 text-amber-500" />
+                    <span>{opp.scan_streak_days}-Day Streak (Persistent Leader)</span>
+                  </span>
+                )}
 
                 {opp.portfolio_fit_score !== undefined && (
                   <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/30">
@@ -672,6 +684,119 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Top 2 High-Conviction Alpha Picks Hero Banner */}
+          {scanResult.top_conviction_picks && scanResult.top_conviction_picks.length > 0 && activeCategoryTab === 'ALL' && (
+            <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-indigo-500/10 border-2 border-emerald-500/30 dark:border-emerald-500/40 shadow-premium space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-emerald-500/20">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-400 to-emerald-500 text-slate-950 flex items-center justify-center font-bold shadow-subtle">
+                    <Sparkles className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center space-x-2">
+                      <span>Model's Top 2 High-Conviction Alpha Picks</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500 text-white uppercase tracking-wider">
+                        Highest Win Potential
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                      Ranked #1 & #2 across all 15 candidates based on calibrated ML probability, asymmetric R:R (&ge;1.8R), and institutional volume confirmation.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-xs font-mono text-emerald-700 dark:text-emerald-400 font-semibold flex items-center space-x-1 self-start sm:self-auto">
+                  <Target className="w-3.5 h-3.5" />
+                  <span>Immediate Swing Focus</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {scanResult.top_conviction_picks.map((opp, idx) => (
+                  <div 
+                    key={opp.symbol}
+                    className="p-4 rounded-xl bg-background-cardLight dark:bg-background-cardDark border border-emerald-500/40 hover:border-emerald-500 shadow-subtle transition-all space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-xs font-mono flex items-center justify-center border border-emerald-500/30">
+                          #{idx + 1}
+                        </span>
+                        <span 
+                          onClick={() => onViewAnalysis(opp.symbol)}
+                          className="text-lg font-bold font-mono text-slate-900 dark:text-white hover:text-blue-500 cursor-pointer"
+                        >
+                          {opp.symbol}
+                        </span>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-bold">
+                          {opp.market_cap_category.replace('_', ' ')}
+                        </span>
+                        {opp.is_multi_day_runner && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-500 font-bold flex items-center space-x-0.5">
+                            <Flame className="w-2.5 h-2.5" />
+                            <span>{opp.scan_streak_days}D Streak</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="text-right font-mono">
+                        <div className="text-base font-bold text-slate-900 dark:text-white">
+                          {formatINR(opp.current_price)}
+                        </div>
+                        <div className={`text-xs font-semibold ${
+                          (opp.daily_change_pct || 0) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                        }`}>
+                          {(opp.daily_change_pct || 0) >= 0 ? '+' : ''}{(opp.daily_change_pct || 0).toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Key Metrics Pill Grid */}
+                    <div className="grid grid-cols-3 gap-2 font-mono text-xs text-center">
+                      <div className="p-2 rounded-lg bg-emerald-500/5 dark:bg-emerald-950/20 border border-emerald-500/20">
+                        <span className="text-[10px] font-sans text-slate-500 uppercase block">ML Win Prob</span>
+                        <strong className="text-emerald-600 dark:text-emerald-400 text-sm">
+                          {opp.ml_probability?.p_t1_before_sl ? `${Math.round(opp.ml_probability.p_t1_before_sl * 100)}%` : '—'}
+                        </strong>
+                      </div>
+                      <div className="p-2 rounded-lg bg-blue-500/5 dark:bg-blue-950/20 border border-blue-500/20">
+                        <span className="text-[10px] font-sans text-slate-500 uppercase block">Target 1 (R:R)</span>
+                        <strong className="text-blue-600 dark:text-blue-400 text-sm">
+                          1:{opp.levels?.risk_reward_ratio_t1 ? opp.levels.risk_reward_ratio_t1.toFixed(1) : '1.8'}R
+                        </strong>
+                      </div>
+                      <div className="p-2 rounded-lg bg-purple-500/5 dark:bg-purple-950/20 border border-purple-500/20">
+                        <span className="text-[10px] font-sans text-slate-500 uppercase block">Entry Zone</span>
+                        <strong className="text-purple-600 dark:text-purple-400 text-xs">
+                          {opp.levels?.entry_range_display || 'Near market'}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-between pt-1 text-xs">
+                      <button
+                        onClick={() => onAddToPortfolio(opp.symbol, opp.current_price || 0)}
+                        className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all shadow-subtle cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add to Investments</span>
+                      </button>
+
+                      <button
+                        onClick={() => onViewAnalysis(opp.symbol)}
+                        className="text-blue-600 dark:text-blue-400 font-semibold hover:underline flex items-center space-x-1 cursor-pointer"
+                      >
+                        <span>Full Quant Breakdown</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

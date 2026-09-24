@@ -38,31 +38,33 @@ class MarketIndexQuote(BaseModel):
     prev_close: float
 
 class MarketBreadth(BaseModel):
+    breadth_type: str = "SECTOR_INDEX_BREADTH"  # SECTOR_INDEX_BREADTH, UNIVERSE_EQUITY_BREADTH
     advances: int
     declines: int
     unchanged: int
     ad_ratio: float
-    pct_above_20_ema: float
-    pct_above_50_ema: float
-    pct_above_200_ema: float
-    highs_52w_count: Optional[int] = 0
-    lows_52w_count: Optional[int] = 0
+    pct_above_20_ema: Optional[float] = None
+    pct_above_50_ema: Optional[float] = None
+    pct_above_200_ema: Optional[float] = None
+    highs_52w_count: Optional[int] = None
+    lows_52w_count: Optional[int] = None
 
 class SectorPerformance(BaseModel):
     sector_name: str
     symbol: str
-    change_percent_1d: float
-    change_percent_5d: float
-    change_percent_20d: float
-    change_percent_50d: float
-    change_percent_100d: float
-    change_percent_6m: float
-    momentum_score: float  # 0 to 100
-    relative_strength_vs_nifty: float
-    trend: str  # STRONG_BULLISH, BULLISH, NEUTRAL, BEARISH, STRONG_BEARISH
-    sector_breadth_pct_above_50ema: float
+    change_percent_1d: Optional[float] = None
+    change_percent_5d: Optional[float] = None
+    change_percent_20d: Optional[float] = None
+    change_percent_50d: Optional[float] = None
+    change_percent_100d: Optional[float] = None
+    change_percent_6m: Optional[float] = None
+    momentum_score: Optional[float] = None  # 0 to 100
+    relative_strength_vs_nifty: Optional[float] = None
+    trend: str = "UNAVAILABLE"  # STRONG_BULLISH, BULLISH, NEUTRAL, BEARISH, STRONG_BEARISH, UNAVAILABLE
+    sector_breadth_pct_above_50ema: Optional[float] = None
     top_driver: Optional[str] = None
     rank: int = 1
+    status: str = "AVAILABLE"  # AVAILABLE, UNAVAILABLE
 
 class MarketRegimePolicy(BaseModel):
     regime: str  # STRONG_BULL, BULL, NEUTRAL, RECOVERY, BEAR, STRESS
@@ -89,6 +91,32 @@ class MarketStatusResponse(BaseModel):
     major_events: List[str]
     last_updated: datetime
     is_live_data: bool
+
+# --- Today's Movers Models (Detection, Not Prediction) ---
+class MarketMoverItem(BaseModel):
+    symbol: str
+    company_name: str
+    sector: str
+    price: float
+    change_percent: float
+    gap_percent: Optional[float] = None
+    volume: int
+    rvol: Optional[float] = None
+    movement_type: str  # TOP_GAINER, TOP_LOSER, UNUSUAL_VOLUME, GAP_UP, GAP_DOWN
+    catalyst_type: str  # STOCK_SPECIFIC, SECTOR_THEME, BROAD_MARKET, UNCLASSIFIED
+    catalyst_headline: Optional[str] = None
+    sector_change_percent: Optional[float] = None
+    why_moved: str
+    status: str = "AVAILABLE"
+
+class TodaysMoversResponse(BaseModel):
+    scan_timestamp: datetime
+    total_market_scanned: int
+    top_gainers: List[MarketMoverItem] = []
+    top_losers: List[MarketMoverItem] = []
+    unusual_volume: List[MarketMoverItem] = []
+    gap_movers: List[MarketMoverItem] = []
+    market_breadth_summary: Optional[MarketBreadth] = None
 
 # --- Candle & Chart Models ---
 class Candle(BaseModel):
@@ -208,13 +236,13 @@ class MLProbabilityMetrics(BaseModel):
     prediction_horizon_days: int = 10
     horizon_label: str = "10 trading days"
     prediction_label: str = "P(T1 before SL within 10 trading days)"
-    model_version: str = "SwingTree-Ensemble-v2.5-Calibrated"
-    calibration_method: str = "Isotonic Regression"
-    training_period: str = "2021-01 to 2024-12 Walk-Forward"
-    validation_period: str = "2025-01 to Present Out-of-Sample"
-    calibration_status: str = "CALIBRATED_ISOTONIC"  # CALIBRATED_ISOTONIC, UNAVAILABLE
-    brier_score_calibration: Optional[float] = 0.164
-    status: str = "AVAILABLE"  # AVAILABLE, UNAVAILABLE
+    model_version: str = "Heuristic-Rule-Based-v1.0"
+    calibration_method: str = "Rule-Based Heuristic (Uncalibrated)"
+    training_period: Optional[str] = None
+    validation_period: Optional[str] = None
+    calibration_status: str = "UNAVAILABLE"  # CALIBRATED_ISOTONIC, UNAVAILABLE, HEURISTIC_RULE_BASED
+    brier_score_calibration: Optional[float] = None
+    status: str = "HEURISTIC_RULE_BASED"  # AVAILABLE, HEURISTIC_RULE_BASED, UNAVAILABLE
     reason: Optional[str] = None
 
 class TradeLevels(BaseModel):
@@ -363,6 +391,9 @@ class StockOpportunity(BaseModel):
     watch_reasons: List[str] = []
     failure_reasons: List[str] = []
     risks: List[str] = []
+    scan_streak_days: int = 1
+    is_multi_day_runner: bool = False
+    streak_description: Optional[str] = None
     data_quality: Optional[DataQualityReport] = None
     data_timestamp: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -393,6 +424,7 @@ class ScannerScanResponse(BaseModel):
     near_misses: NearMissesGroup
     total_qualified_count: int = 0  # Total BUY Candidates across all categories (max 15)
     total_near_misses_count: int = 0
+    top_conviction_picks: List[StockOpportunity] = []  # Top 2 Highest-Conviction Alpha Picks
     opportunities: List[StockOpportunity] = []  # Flattened top recommendations (max 15)
     buy_candidates_count: int = 0
     near_misses_count: int = 0

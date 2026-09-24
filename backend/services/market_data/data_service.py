@@ -14,20 +14,26 @@ class MarketDataService:
     """
     Central orchestrator for all market data operations.
     Communicates strictly with Upstox API V2. Never creates fake prices or synthetic candles.
-    Uses concurrency pooling & multi-tier in-memory caching for real-time throughput.
+    Uses concurrency pooling, in-flight request deduplication, and multi-tier in-memory caching.
     """
     def __init__(self):
         self.provider = UpstoxProvider(settings.UPSTOX_ACCESS_TOKEN)
         self._candle_cache: Dict[str, List[Candle]] = {}
         self._cache_timestamp: Dict[str, datetime] = {}
-        self._cache_ttl_seconds = 300 # 5 minutes candle cache
+        self._cache_ttl_seconds = 300  # 5 minutes candle cache
+        
+        self._live_quote_cache: Dict[str, Dict[str, Any]] = {}
+        self._quote_cache_timestamp: Dict[str, datetime] = {}
+        self._quote_ttl_seconds = 15   # 15 seconds for live quote auto-fill
         
         self._indices_cache: Optional[Dict[str, MarketIndexQuote]] = None
         self._indices_cache_time: Optional[datetime] = None
         
         self._sector_cache: Optional[List[Dict[str, Any]]] = None
         self._sector_cache_time: Optional[datetime] = None
-        self._fast_ttl_seconds = 60 # 1 minute for live indices
+        self._fast_ttl_seconds = 60    # 1 minute for live indices
+        
+        self._in_flight_candles: Dict[str, asyncio.Future] = {}
         
     async def get_indices_status(self) -> Dict[str, MarketIndexQuote]:
         """
@@ -39,55 +45,56 @@ class MarketDataService:
             if (now - self._indices_cache_time).total_seconds() < self._fast_ttl_seconds:
                 return self._indices_cache
 
-        keys = ["NIFTY 50", "BANKNIFTY", "INDIA VIX"]
+        keys = ["NIFTY 50", "BANKNIFTY", "INDIA VIX", "NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "NSE_INDEX|India VIX"]
         raw_quotes = await self.provider.get_live_quote(keys)
         
-        nifty_quote = raw_quotes.get("NIFTY 50") or raw_quotes.get("Nifty 50") or {
-            "symbol": "NIFTY 50", "price": 0.0, "change": 0.0, "change_percent": 0.0,
-            "open": 0.0, "high": 0.0, "low": 0.0, "prev_close": 0.0
-        }
-        
-        bank_nifty_quote = raw_quotes.get("BANKNIFTY") or raw_quotes.get("Nifty Bank") or {
-            "symbol": "BANKNIFTY", "price": 0.0, "change": 0.0, "change_percent": 0.0,
-            "open": 0.0, "high": 0.0, "low": 0.0, "prev_close": 0.0
-        }
-        
-        vix_quote = raw_quotes.get("INDIA VIX") or raw_quotes.get("India VIX") or {
-            "symbol": "INDIAVIX", "price": 0.0, "change": 0.0, "change_percent": 0.0,
-            "open": 0.0, "high": 0.0, "low": 0.0, "prev_close": 0.0
-        }
-        
-        res = {
-            "nifty": MarketIndexQuote(
-                symbol="NIFTY 50", name="NIFTY 50",
-                price=float(nifty_quote.get("price", 0.0)),
-                change=float(nifty_quote.get("change", 0.0)),
-                change_percent=float(nifty_quote.get("change_percent", 0.0)),
-                high=float(nifty_quote.get("high", 0.0)),
-                low=float(nifty_quote.get("low", 0.0)),
-                open=float(nifty_quote.get("open", 0.0)),
-                prev_close=float(nifty_quote.get("prev_close", 0.0))
-            ),
-            "bank_nifty": MarketIndexQuote(
-                symbol="BANKNIFTY", name="NIFTY Bank",
-                price=float(bank_nifty_quote.get("price", 0.0)),
-                change=float(bank_nifty_quote.get("change", 0.0)),
-                change_percent=float(bank_nifty_quote.get("change_percent", 0.0)),
-                high=float(bank_nifty_quote.get("high", 0.0)),
-                low=float(bank_nifty_quote.get("low", 0.0)),
-                open=float(bank_nifty_quote.get("open", 0.0)),
-                prev_close=float(bank_nifty_quote.get("prev_close", 0.0))
-            ),
-            "india_vix": MarketIndexQuote(
-                symbol="INDIAVIX", name="India VIX",
-                price=float(vix_quote.get("price", 0.0)),
-                change=float(vix_quote.get("change", 0.0)),
-                change_percent=float(vix_quote.get("change_percent", 0.0)),
-                high=float(vix_quote.get("high", 0.0)),
-                low=float(vix_quote.get("low", 0.0)),
-                open=float(vix_quote.get("open", 0.0)),
-                prev_close=float(vix_quote.get("prev_close", 0.0))
+        nifty_quote = raw_quotes.get("NIFTY 50") or raw_quotes.get("Nifty 50") or raw_quotes.get("NSE_INDEX|Nifty 50") or {}
+        bank_nifty_quote = raw_quotes.get("BANKNIFTY") or raw_quotes.get("Nifty Bank") or raw_quotes.get("NSE_INDEX|Nifty Bank") or {}
+        vix_quote = raw_quotes.get("INDIA VIX") or raw_quotes.get("India VIX") or raw_quotes.get("NSE_INDEX|India VIX") or {}
+
+        # If live quote price is 0.0 or unavailable, extract from verified historical daily candles
+        async def resolve_index_metric(sym: str, quote: Dict[str, Any], default_name: str) -> MarketIndexQuote:
+            p = float(quote.get("price", 0.0))
+            chg = float(quote.get("change", 0.0))
+            chg_pct = float(quote.get("change_percent", 0.0))
+            h = float(quote.get("high", 0.0))
+            l = float(quote.get("low", 0.0))
+            o = float(quote.get("open", 0.0))
+            pc = float(quote.get("prev_close", 0.0))
+
+            if p <= 0.0:
+                candles = await self.get_historical_candles_cached(sym, interval="day", days=10)
+                if candles and len(candles) >= 1:
+                    latest = candles[-1]
+                    prev = candles[-2] if len(candles) >= 2 else None
+                    p = float(latest.close)
+                    pc = float(prev.close) if prev else float(latest.open)
+                    chg = round(p - pc, 2)
+                    chg_pct = round((chg / pc * 100.0), 2) if pc else 0.0
+                    h = float(latest.high)
+                    l = float(latest.low)
+                    o = float(latest.open)
+
+            return MarketIndexQuote(
+                symbol=sym,
+                name=default_name,
+                price=p,
+                change=chg,
+                change_percent=chg_pct,
+                high=h,
+                low=l,
+                open=o,
+                prev_close=pc
             )
+
+        nifty_iq = await resolve_index_metric("NIFTY 50", nifty_quote, "NIFTY 50")
+        bank_iq = await resolve_index_metric("BANKNIFTY", bank_nifty_quote, "NIFTY Bank")
+        vix_iq = await resolve_index_metric("INDIA VIX", vix_quote, "India VIX")
+
+        res = {
+            "nifty": nifty_iq,
+            "bank_nifty": bank_iq,
+            "india_vix": vix_iq
         }
         self._indices_cache = res
         self._indices_cache_time = now
@@ -100,44 +107,66 @@ class MarketDataService:
         days: int = 400
     ) -> List[Candle]:
         """
-        Retrieves historical candle list from Upstox API V2 with caching.
+        Retrieves historical candle list from Upstox API V2 with caching & in-flight deduplication.
         Default 400 days (~260 trading days) ensures full SMA200 and 52-week coverage.
         """
-        cache_key = f"{symbol}_{interval}_{days}"
+        sym_clean = symbol.upper().strip()
+        cache_key = f"{sym_clean}_{interval}_{days}"
         now = datetime.utcnow()
         
+        # 1. Check cache
         if cache_key in self._candle_cache:
             last_time = self._cache_timestamp.get(cache_key)
             if last_time and (now - last_time).total_seconds() < self._cache_ttl_seconds:
                 return self._candle_cache[cache_key]
-                
-        to_date = date.today().strftime("%Y-%m-%d")
-        from_date = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
-        
-        candles = await self.provider.get_historical_candles(
-            instrument_key=symbol,
-            interval=interval,
-            to_date=to_date,
-            from_date=from_date
-        )
-        
-        if candles:
-            self._candle_cache[cache_key] = candles
-            self._cache_timestamp[cache_key] = now
-            return candles
+
+        # 2. In-flight request deduplication (Singleflight)
+        if cache_key in self._in_flight_candles:
+            try:
+                return await self._in_flight_candles[cache_key]
+            except Exception:
+                pass
+
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._in_flight_candles[cache_key] = fut
+
+        try:
+            to_date = date.today().strftime("%Y-%m-%d")
+            from_date = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
             
-        return []
+            candles = await self.provider.get_historical_candles(
+                instrument_key=sym_clean,
+                interval=interval,
+                to_date=to_date,
+                from_date=from_date
+            )
+            
+            if candles:
+                self._candle_cache[cache_key] = candles
+                self._cache_timestamp[cache_key] = now
+            
+            if not fut.done():
+                fut.set_result(candles or [])
+            return candles or []
+        except Exception as e:
+            logger.warning(f"Error fetching candles for {sym_clean}: {e}")
+            if not fut.done():
+                fut.set_result([])
+            return []
+        finally:
+            self._in_flight_candles.pop(cache_key, None)
 
     async def get_multiple_candles_parallel(
         self,
         symbols: List[str],
         interval: str = "day",
         days: int = 400,
-        concurrency: int = 15
+        concurrency: int = 8
     ) -> Dict[str, List[Candle]]:
         """
-        Concurrent parallel candle retriever using asyncio Semaphore.
-        Retrieves 400-day daily candles for all symbols simultaneously within 1-2 seconds.
+        Controlled parallel candle retriever using asyncio Semaphore.
+        Throttled strictly to 8 concurrent tasks to protect against rate limit spikes.
         """
         semaphore = asyncio.Semaphore(concurrency)
         results: Dict[str, List[Candle]] = {}
@@ -229,13 +258,22 @@ class MarketDataService:
 
     async def get_live_quote_for_symbol(self, symbol: str) -> Dict[str, Any]:
         """
-        Gets current live quote from Upstox API.
+        Gets current live quote from Upstox API with 15-second cache to prevent rapid hammering.
         """
-        quotes = await self.provider.get_live_quote([symbol])
-        if symbol in quotes:
-            return quotes[symbol]
-        return {}
+        sym = symbol.upper().strip()
+        now = datetime.utcnow()
+        
+        if sym in self._live_quote_cache:
+            last_t = self._quote_cache_timestamp.get(sym)
+            if last_t and (now - last_t).total_seconds() < self._quote_ttl_seconds:
+                return self._live_quote_cache[sym]
 
+        quotes = await self.provider.get_live_quote([sym])
+        if sym in quotes and quotes[sym]:
+            self._live_quote_cache[sym] = quotes[sym]
+            self._quote_cache_timestamp[sym] = now
+            return quotes[sym]
+        return {}
 
     def get_supported_universe(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
         from backend.services.market_data.universe import get_or_fetch_active_universe
@@ -273,4 +311,3 @@ class MarketDataService:
         return results
 
 data_service = MarketDataService()
-

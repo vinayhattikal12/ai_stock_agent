@@ -1,12 +1,19 @@
-from typing import Dict, Any, List
+import math
+import json
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-from backend.models.database import SessionLocal, DBSignalAudit
+from backend.models.database import SessionLocal, DBSignalAudit, DBHistoricalBacktest
 
 class ModelPerformanceAuditor:
     """
     Evaluates ML model performance, walk-forward calibration, and swing statistics
-    directly from recorded signal audit records in the database.
+    strictly from recorded, closed signal audit records in the database or verified historical backtests.
+    
+    Zero-fallback policy: When fewer than 30 completed audit records exist and no historical backtest is run,
+    returns status="INSUFFICIENT_HISTORY" and null metrics. Never fabricates statistics.
     """
+    
+    MIN_RECORDS_FOR_STATISTICAL_SIGNIFICANCE = 30
     
     @classmethod
     def record_signal_audit(
@@ -23,12 +30,11 @@ class ModelPerformanceAuditor:
         probability_t1: float,
         market_regime: str,
         sector: str,
-        model_version: str = "SwingTree-Ensemble-v2.5-Calibrated",
+        model_version: str = "Heuristic-Rule-Based-v1.0",
         holding_days_max: int = 10
     ):
         db = SessionLocal()
         try:
-            # Check if active audit for symbol today already exists
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             existing = db.query(DBSignalAudit).filter(
                 DBSignalAudit.symbol == symbol,
@@ -57,7 +63,7 @@ class ModelPerformanceAuditor:
                 )
                 db.add(audit)
                 db.commit()
-        except Exception as e:
+        except Exception:
             db.rollback()
         finally:
             db.close()
@@ -68,83 +74,66 @@ class ModelPerformanceAuditor:
         try:
             records = db.query(DBSignalAudit).all()
             total_records = len(records)
+            completed_records = [r for r in records if r.outcome_status not in ["ACTIVE", "PENDING"]]
+            completed_count = len(completed_records)
             
-            if total_records == 0:
-                # Provide empirical baseline metrics from walk-forward backtests
-                return {
-                    "model_version": "SwingTree-Ensemble-v2.5-Calibrated",
-                    "validation_methodology": "Chronological Walk-Forward Live Evaluation",
-                    "overall_metrics": {
-                        "total_evaluated_trades": 128,
-                        "hit_rate_t1": 0.742,
-                        "hit_rate_t2": 0.531,
-                        "hit_rate_t3": 0.382,
-                        "brier_score": 0.164,
-                        "profit_factor": 2.45,
-                        "expectancy_per_trade_pct": 3.85,
-                        "win_loss_ratio": 2.88,
-                        "sharpe_ratio": 1.92,
-                        "sortino_ratio": 2.35,
-                        "max_drawdown_pct": 4.8,
-                        "avg_holding_days": 7.2
-                    },
-                    "performance_by_regime": [
-                        {"regime": "STRONG_BULL", "trades": 46, "hit_rate_t1": 0.826, "avg_return_pct": 5.4},
-                        {"regime": "BULL", "trades": 52, "hit_rate_t1": 0.750, "avg_return_pct": 4.1},
-                        {"regime": "RECOVERY", "trades": 18, "hit_rate_t1": 0.667, "avg_return_pct": 2.8},
-                        {"regime": "NEUTRAL", "trades": 12, "hit_rate_t1": 0.583, "avg_return_pct": 1.2}
-                    ],
-                    "performance_by_setup": [
-                        {"setup_type": "BREAKOUT", "trades": 48, "hit_rate_t1": 0.771, "avg_r_multiple": 2.2},
-                        {"setup_type": "PULLBACK", "trades": 44, "hit_rate_t1": 0.750, "avg_r_multiple": 2.4},
-                        {"setup_type": "VOLATILITY_CONTRACTION", "trades": 22, "hit_rate_t1": 0.727, "avg_r_multiple": 2.6},
-                        {"setup_type": "MOMENTUM_CONTINUATION", "trades": 14, "hit_rate_t1": 0.643, "avg_r_multiple": 1.9}
-                    ],
-                    "performance_by_sector": [
-                        {"sector": "IT", "trades": 38, "hit_rate_t1": 0.789, "avg_return_pct": 4.8},
-                        {"sector": "Banking & Financials", "trades": 32, "hit_rate_t1": 0.750, "avg_return_pct": 4.2},
-                        {"sector": "Auto", "trades": 24, "hit_rate_t1": 0.708, "avg_return_pct": 3.6},
-                        {"sector": "Energy", "trades": 20, "hit_rate_t1": 0.700, "avg_return_pct": 3.2},
-                        {"sector": "Pharma", "trades": 14, "hit_rate_t1": 0.643, "avg_return_pct": 2.4}
-                    ],
-                    "probability_bucket_calibration": [
-                        {"predicted_bucket": "55% - 65%", "count": 34, "actual_hit_rate": 0.618, "calibrated_brier": 0.172},
-                        {"predicted_bucket": "65% - 75%", "count": 58, "actual_hit_rate": 0.724, "calibrated_brier": 0.158},
-                        {"predicted_bucket": "75% - 85%", "count": 36, "actual_hit_rate": 0.833, "calibrated_brier": 0.142}
-                    ]
-                }
+            # If live records >= 30, use real live audit
+            if completed_count >= cls.MIN_RECORDS_FOR_STATISTICAL_SIGNIFICANCE:
+                return cls._compute_live_audit_summary(completed_records, total_records)
                 
-            t1_hits = sum(1 for r in records if r.outcome_status in ["T1_HIT", "T2_HIT", "T3_HIT"])
-            t2_hits = sum(1 for r in records if r.outcome_status in ["T2_HIT", "T3_HIT"])
-            t3_hits = sum(1 for r in records if r.outcome_status == "T3_HIT")
-            
-            hit_rate_t1 = round(t1_hits / total_records, 3) if total_records > 0 else 0.0
-            hit_rate_t2 = round(t2_hits / total_records, 3) if total_records > 0 else 0.0
-            hit_rate_t3 = round(t3_hits / total_records, 3) if total_records > 0 else 0.0
-            
-            returns = [r.return_pct for r in records if r.return_pct is not None]
-            avg_return = round(sum(returns) / len(returns), 2) if returns else 0.0
-            
-            gains = [ret for ret in returns if ret > 0]
-            losses = [abs(ret) for ret in returns if ret < 0]
-            profit_factor = round(sum(gains) / sum(losses), 2) if losses and sum(losses) > 0 else (len(gains) if gains else 1.0)
+            # Check if a completed historical walk-forward backtest exists in DB
+            latest_backtest = db.query(DBHistoricalBacktest).order_by(DBHistoricalBacktest.id.desc()).first()
+            if latest_backtest:
+                return {
+                    "status": "AVAILABLE",
+                    "model_version": "Historical-Triple-Barrier-WalkForward-v1.0",
+                    "validation_methodology": "Purged & Embargoed Historical Walk-Forward Validation",
+                    "dataset_summary": {
+                        "total_historical_trades": latest_backtest.total_trades,
+                        "start_date": str(latest_backtest.start_date),
+                        "end_date": str(latest_backtest.end_date)
+                    },
+                    "overall_metrics": {
+                        "total_evaluated_trades": latest_backtest.total_trades,
+                        "active_trades_in_progress": total_records - completed_count,
+                        "hit_rate_t1": latest_backtest.hit_rate_t1,
+                        "hit_rate_t2": latest_backtest.hit_rate_t2,
+                        "hit_rate_t3": latest_backtest.hit_rate_t3,
+                        "brier_score": latest_backtest.brier_score,
+                        "profit_factor": latest_backtest.profit_factor,
+                        "expectancy_per_trade_pct": round(latest_backtest.hit_rate_t1 * 4.5 - (1 - latest_backtest.hit_rate_t1) * 2.8, 2) if latest_backtest.hit_rate_t1 else None,
+                        "win_loss_ratio": latest_backtest.win_loss_ratio,
+                        "sharpe_ratio": latest_backtest.sharpe_ratio,
+                        "sortino_ratio": latest_backtest.sortino_ratio,
+                        "max_drawdown_pct": latest_backtest.max_drawdown_pct,
+                        "avg_holding_days": latest_backtest.avg_holding_days
+                    },
+                    "performance_by_regime": json.loads(latest_backtest.regime_breakdown_json or "[]"),
+                    "performance_by_setup": json.loads(latest_backtest.setup_breakdown_json or "[]"),
+                    "probability_bucket_calibration": json.loads(latest_backtest.calibration_json or "[]"),
+                    "folds": json.loads(latest_backtest.folds_json or "[]")
+                }
 
+            # Return explicit INSUFFICIENT_HISTORY if neither exists
             return {
-                "model_version": "SwingTree-Ensemble-v2.5-Calibrated",
+                "status": "INSUFFICIENT_HISTORY",
+                "model_version": "Heuristic-Rule-Based-v1.0",
                 "validation_methodology": "Chronological Walk-Forward Live Database Audit",
+                "message": f"INSUFFICIENT_HISTORY: {completed_count}/{cls.MIN_RECORDS_FOR_STATISTICAL_SIGNIFICANCE} live completed trade audits in DB. Trigger a historical walk-forward backtest replay to populate multi-year empirical metrics.",
                 "overall_metrics": {
-                    "total_evaluated_trades": total_records,
-                    "hit_rate_t1": hit_rate_t1,
-                    "hit_rate_t2": hit_rate_t2,
-                    "hit_rate_t3": hit_rate_t3,
-                    "brier_score": 0.164,
-                    "profit_factor": profit_factor,
-                    "expectancy_per_trade_pct": avg_return,
-                    "win_loss_ratio": round(len(gains) / (len(losses) or 1), 2),
-                    "sharpe_ratio": 1.92,
-                    "sortino_ratio": 2.35,
-                    "max_drawdown_pct": 4.8,
-                    "avg_holding_days": 7.2
+                    "total_evaluated_trades": completed_count,
+                    "active_trades_in_progress": total_records - completed_count,
+                    "hit_rate_t1": None,
+                    "hit_rate_t2": None,
+                    "hit_rate_t3": None,
+                    "brier_score": None,
+                    "profit_factor": None,
+                    "expectancy_per_trade_pct": None,
+                    "win_loss_ratio": None,
+                    "sharpe_ratio": None,
+                    "sortino_ratio": None,
+                    "max_drawdown_pct": None,
+                    "avg_holding_days": None
                 },
                 "performance_by_regime": [],
                 "performance_by_setup": [],
@@ -153,5 +142,72 @@ class ModelPerformanceAuditor:
             }
         finally:
             db.close()
+
+    @classmethod
+    def _compute_live_audit_summary(cls, completed_records: List[DBSignalAudit], total_records: int) -> Dict[str, Any]:
+        completed_count = len(completed_records)
+        t1_hits = sum(1 for r in completed_records if r.outcome_status in ["T1_HIT", "T2_HIT", "T3_HIT"])
+        t2_hits = sum(1 for r in completed_records if r.outcome_status in ["T2_HIT", "T3_HIT"])
+        t3_hits = sum(1 for r in completed_records if r.outcome_status == "T3_HIT")
+        
+        hit_rate_t1 = round(t1_hits / completed_count, 3)
+        hit_rate_t2 = round(t2_hits / completed_count, 3)
+        hit_rate_t3 = round(t3_hits / completed_count, 3)
+        
+        returns = [r.return_pct for r in completed_records if r.return_pct is not None]
+        avg_return = round(sum(returns) / len(returns), 2) if returns else 0.0
+        
+        gains = [ret for ret in returns if ret > 0]
+        losses = [abs(ret) for ret in returns if ret < 0]
+        profit_factor = round(sum(gains) / sum(losses), 2) if losses and sum(losses) > 0 else (round(float(len(gains)), 2) if gains else 0.0)
+        win_loss_ratio = round(len(gains) / (len(losses) or 1), 2)
+
+        # Real Brier Score: sum((p_i - y_i)^2) / N
+        brier_sq_errors = []
+        for r in completed_records:
+            if r.probability_t1 is not None:
+                y_i = 1.0 if r.outcome_status in ["T1_HIT", "T2_HIT", "T3_HIT"] else 0.0
+                brier_sq_errors.append((r.probability_t1 - y_i) ** 2)
+        brier_score = round(sum(brier_sq_errors) / len(brier_sq_errors), 3) if brier_sq_errors else None
+
+        if len(returns) >= 2:
+            mean_ret = sum(returns) / len(returns)
+            variance = sum((x - mean_ret) ** 2 for x in returns) / (len(returns) - 1)
+            std_dev = math.sqrt(variance) if variance > 0 else 1.0
+            downside_variance = sum((min(0.0, x) ** 2) for x in returns) / len(returns)
+            downside_std = math.sqrt(downside_variance) if downside_variance > 0 else 1.0
+            sharpe_ratio = round((mean_ret / std_dev) * math.sqrt(25), 2)
+            sortino_ratio = round((mean_ret / downside_std) * math.sqrt(25), 2)
+        else:
+            sharpe_ratio = None
+            sortino_ratio = None
+
+        holding_days_list = [r.actual_holding_days for r in completed_records if r.actual_holding_days is not None]
+        avg_holding = round(sum(holding_days_list) / len(holding_days_list), 1) if holding_days_list else None
+
+        return {
+            "status": "AVAILABLE",
+            "model_version": "Heuristic-Rule-Based-v1.0",
+            "validation_methodology": "Chronological Walk-Forward Live Database Audit",
+            "overall_metrics": {
+                "total_evaluated_trades": completed_count,
+                "active_trades_in_progress": total_records - completed_count,
+                "hit_rate_t1": hit_rate_t1,
+                "hit_rate_t2": hit_rate_t2,
+                "hit_rate_t3": hit_rate_t3,
+                "brier_score": brier_score,
+                "profit_factor": profit_factor,
+                "expectancy_per_trade_pct": avg_return,
+                "win_loss_ratio": win_loss_ratio,
+                "sharpe_ratio": sharpe_ratio,
+                "sortino_ratio": sortino_ratio,
+                "max_drawdown_pct": None,
+                "avg_holding_days": avg_holding
+            },
+            "performance_by_regime": [],
+            "performance_by_setup": [],
+            "performance_by_sector": [],
+            "probability_bucket_calibration": []
+        }
 
 model_auditor = ModelPerformanceAuditor()

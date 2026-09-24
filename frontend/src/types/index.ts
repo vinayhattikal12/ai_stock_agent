@@ -51,6 +51,33 @@ export interface MarketRegimePolicy {
   allow_new_longs: boolean;
 }
 
+export interface MarketMoverItem {
+  symbol: string;
+  company_name: string;
+  sector: string;
+  price: number;
+  change_percent: number;
+  gap_percent?: number;
+  volume: number;
+  rvol?: number;
+  movement_type: 'TOP_GAINER' | 'TOP_LOSER' | 'UNUSUAL_VOLUME' | 'GAP_UP' | 'GAP_DOWN';
+  catalyst_type: 'STOCK_SPECIFIC' | 'SECTOR_THEME' | 'BROAD_MARKET' | 'UNCLASSIFIED';
+  catalyst_headline?: string;
+  sector_change_percent?: number;
+  why_moved: string;
+  status: string;
+}
+
+export interface TodaysMoversResponse {
+  scan_timestamp: string;
+  total_market_scanned: number;
+  top_gainers: MarketMoverItem[];
+  top_losers: MarketMoverItem[];
+  unusual_volume: MarketMoverItem[];
+  gap_movers: MarketMoverItem[];
+  market_breadth_summary?: MarketBreadth;
+}
+
 export interface MarketStatusResponse {
   status_label: string;
   regime: 'STRONG_BULL' | 'BULL' | 'NEUTRAL' | 'RECOVERY' | 'BEAR' | 'STRESS';
@@ -365,6 +392,9 @@ export interface StockOpportunity {
   watch_reasons: string[];
   failure_reasons: string[];
   risks: string[];
+  scan_streak_days?: number;
+  is_multi_day_runner?: boolean;
+  streak_description?: string;
   data_quality?: DataQualityReport;
   data_timestamp?: string;
   created_at: string;
@@ -398,6 +428,7 @@ export interface ScannerScanResponse {
   near_misses: NearMissesGroup;
   total_qualified_count: number;
   total_near_misses_count: number;
+  top_conviction_picks?: StockOpportunity[];
   opportunities: StockOpportunity[];
   buy_candidates_count: number;
   near_misses_count: number;

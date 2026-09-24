@@ -92,6 +92,46 @@ class DBHistoricalScan(Base):
     top_symbols_json = Column(Text, nullable=True)
     result_json = Column(Text, nullable=False)
 
+class DBHistoricalBacktest(Base):
+    __tablename__ = "historical_backtests"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    run_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    total_trades = Column(Integer, default=0)
+    hit_rate_t1 = Column(Float, nullable=True)
+    hit_rate_t2 = Column(Float, nullable=True)
+    hit_rate_t3 = Column(Float, nullable=True)
+    brier_score = Column(Float, nullable=True)
+    sharpe_ratio = Column(Float, nullable=True)
+    sortino_ratio = Column(Float, nullable=True)
+    profit_factor = Column(Float, nullable=True)
+    max_drawdown_pct = Column(Float, nullable=True)
+    win_loss_ratio = Column(Float, nullable=True)
+    avg_holding_days = Column(Float, nullable=True)
+    folds_json = Column(Text, nullable=True)
+    calibration_json = Column(Text, nullable=True)
+    regime_breakdown_json = Column(Text, nullable=True)
+    setup_breakdown_json = Column(Text, nullable=True)
+    status = Column(String(50), default="COMPLETED")
+
+class DBNewsCatalyst(Base):
+    __tablename__ = "news_catalysts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(50), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False, index=True)  # EARNINGS, BOARD_MEETING, ORDER_WIN, CAPEX, CORPORATE_ACTION, INSIDER_BUY
+    direction = Column(String(20), default="NEUTRAL")  # POSITIVE, NEGATIVE, NEUTRAL
+    materiality = Column(String(20), default="MEDIUM")  # HIGH, MEDIUM, LOW
+    time_horizon = Column(String(20), default="SHORT")  # SHORT, MEDIUM, LONG
+    headline = Column(Text, nullable=False)
+    source = Column(String(100), default="NSE Corporate Announcements")
+    published_at = Column(DateTime, default=datetime.utcnow, index=True)
+    days_away = Column(Integer, nullable=True)
+    raw_details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # Lazy import to avoid circular dependency

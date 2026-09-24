@@ -1,13 +1,20 @@
 import React from 'react';
-import { ShieldAlert, TrendingUp, TrendingDown, Clock, ShieldCheck, Zap } from 'lucide-react';
+import { ShieldAlert, TrendingUp, TrendingDown, Clock, ShieldCheck, Zap, RefreshCw } from 'lucide-react';
 import { MarketStatusResponse } from '../types';
 
 interface MarketHeaderProps {
   marketStatus: MarketStatusResponse | null;
   loading: boolean;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
-export const MarketHeader: React.FC<MarketHeaderProps> = ({ marketStatus, loading }) => {
+export const MarketHeader: React.FC<MarketHeaderProps> = ({ 
+  marketStatus, 
+  loading,
+  onRefresh,
+  isRefreshing 
+}) => {
   if (loading && !marketStatus) {
     return (
       <div className="animate-pulse space-y-4">
@@ -26,9 +33,9 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({ marketStatus, loadin
   const regime_description = marketStatus?.regime_description || 'Deterministic Decision-Support & Quantitative Swing Trading Intelligence';
   const last_updated = marketStatus?.last_updated || new Date().toISOString();
 
-  const nifty = marketStatus?.nifty || { symbol: 'NIFTY 50', price: 25400.0, change: 0.0, change_percent: 0.0 };
-  const bank_nifty = marketStatus?.bank_nifty || { symbol: 'BANKNIFTY', price: 53500.0, change: 0.0, change_percent: 0.0 };
-  const india_vix = marketStatus?.india_vix || { symbol: 'INDIA VIX', price: 13.5, change: 0.0, change_percent: 0.0 };
+  const nifty = marketStatus?.nifty;
+  const bank_nifty = marketStatus?.bank_nifty;
+  const india_vix = marketStatus?.india_vix;
 
   // Determine regime visual styling
   const getRegimeBadge = () => {
@@ -98,9 +105,22 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({ marketStatus, loadin
           </p>
         </div>
 
-        <div className="flex items-center space-x-2 text-xs text-slate-500 dark:text-slate-400 font-mono">
-          <Clock className="w-3.5 h-3.5" />
-          <span>Last Updated: {formatTime(last_updated)}</span>
+        <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2 text-xs text-slate-500 dark:text-slate-400 font-mono">
+            <Clock className="w-3.5 h-3.5" />
+            <span>Last Updated: {formatTime(last_updated)}</span>
+          </div>
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              disabled={isRefreshing || loading}
+              title="Refresh live market data and quotes now"
+              className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 border border-border-light dark:border-border-dark transition-all disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-500' : ''}`} />
+              <span>{isRefreshing ? 'Updating...' : 'Update Data'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -110,21 +130,29 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({ marketStatus, loadin
         <div className="p-4 rounded-xl bg-background-cardLight dark:bg-background-cardDark border border-border-light dark:border-border-dark shadow-subtle">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">NIFTY 50</span>
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-              (nifty.change || 0) >= 0 
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
-                : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
-            }`}>
-              {(nifty.change || 0) >= 0 ? '+' : ''}{(nifty.change_percent || 0).toFixed(2)}%
-            </span>
+            {nifty && nifty.price > 0 ? (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                (nifty.change || 0) >= 0 
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
+                  : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+              }`}>
+                {(nifty.change || 0) >= 0 ? '+' : ''}{(nifty.change_percent || 0).toFixed(2)}%
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-400 font-mono">Syncing...</span>
+            )}
           </div>
           <div className="mt-2 flex items-baseline justify-between">
             <span className="text-2xl font-bold font-mono tracking-tight text-slate-900 dark:text-white">
-              ₹{(nifty.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {nifty && nifty.price > 0 
+                ? `₹${nifty.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : '—'}
             </span>
-            <span className="text-xs text-slate-500 font-mono">
-              {(nifty.change || 0) >= 0 ? '+' : ''}{(nifty.change || 0).toFixed(2)}
-            </span>
+            {nifty && nifty.price > 0 && (
+              <span className={`text-xs font-mono ${(nifty.change || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {(nifty.change || 0) >= 0 ? '+' : ''}{(nifty.change || 0).toFixed(2)}
+              </span>
+            )}
           </div>
         </div>
 
@@ -132,21 +160,29 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({ marketStatus, loadin
         <div className="p-4 rounded-xl bg-background-cardLight dark:bg-background-cardDark border border-border-light dark:border-border-dark shadow-subtle">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Bank NIFTY</span>
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-              (bank_nifty.change || 0) >= 0 
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
-                : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
-            }`}>
-              {(bank_nifty.change || 0) >= 0 ? '+' : ''}{(bank_nifty.change_percent || 0).toFixed(2)}%
-            </span>
+            {bank_nifty && bank_nifty.price > 0 ? (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                (bank_nifty.change || 0) >= 0 
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
+                  : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+              }`}>
+                {(bank_nifty.change || 0) >= 0 ? '+' : ''}{(bank_nifty.change_percent || 0).toFixed(2)}%
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-400 font-mono">Syncing...</span>
+            )}
           </div>
           <div className="mt-2 flex items-baseline justify-between">
             <span className="text-2xl font-bold font-mono tracking-tight text-slate-900 dark:text-white">
-              ₹{(bank_nifty.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {bank_nifty && bank_nifty.price > 0 
+                ? `₹${bank_nifty.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : '—'}
             </span>
-            <span className="text-xs text-slate-500 font-mono">
-              {(bank_nifty.change || 0) >= 0 ? '+' : ''}{(bank_nifty.change || 0).toFixed(2)}
-            </span>
+            {bank_nifty && bank_nifty.price > 0 && (
+              <span className={`text-xs font-mono ${(bank_nifty.change || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {(bank_nifty.change || 0) >= 0 ? '+' : ''}{(bank_nifty.change || 0).toFixed(2)}
+              </span>
+            )}
           </div>
         </div>
 
@@ -154,21 +190,27 @@ export const MarketHeader: React.FC<MarketHeaderProps> = ({ marketStatus, loadin
         <div className="p-4 rounded-xl bg-background-cardLight dark:bg-background-cardDark border border-border-light dark:border-border-dark shadow-subtle">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">India VIX</span>
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-              (india_vix.price || 0) < 15 
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
-                : ((india_vix.price || 0) > 20 ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400')
-            }`}>
-              {(india_vix.price || 0) < 15 ? 'Low Volatility' : ((india_vix.price || 0) > 20 ? 'High Volatility' : 'Moderate')}
-            </span>
+            {india_vix && india_vix.price > 0 ? (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                (india_vix.price || 0) < 15 
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
+                  : ((india_vix.price || 0) > 20 ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400')
+              }`}>
+                {(india_vix.price || 0) < 15 ? 'Low Volatility' : ((india_vix.price || 0) > 20 ? 'High Volatility' : 'Moderate')}
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-400 font-mono">Syncing...</span>
+            )}
           </div>
           <div className="mt-2 flex items-baseline justify-between">
             <span className="text-2xl font-bold font-mono tracking-tight text-slate-900 dark:text-white">
-              {(india_vix.price || 0).toFixed(2)}
+              {india_vix && india_vix.price > 0 ? (india_vix.price || 0).toFixed(2) : '—'}
             </span>
-            <span className={`text-xs font-mono ${(india_vix.change || 0) <= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {(india_vix.change || 0) >= 0 ? '+' : ''}{(india_vix.change || 0).toFixed(2)} ({(india_vix.change_percent || 0).toFixed(1)}%)
-            </span>
+            {india_vix && india_vix.price > 0 && (
+              <span className={`text-xs font-mono ${(india_vix.change || 0) <= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {(india_vix.change || 0) >= 0 ? '+' : ''}{(india_vix.change || 0).toFixed(2)} ({(india_vix.change_percent || 0).toFixed(1)}%)
+              </span>
+            )}
           </div>
         </div>
       </div>

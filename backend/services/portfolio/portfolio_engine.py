@@ -43,6 +43,22 @@ class PortfolioEngine:
         company_name = match["name"] if match else f"{symbol} Ltd"
         sector = match["sector"] if match else "Diversified"
         
+        # Parse purchase date and elapsed holding days
+        parsed_purchase_date: Optional[date] = None
+        holding_days = 0
+        if holding.purchase_date:
+            try:
+                if isinstance(holding.purchase_date, date):
+                    parsed_purchase_date = holding.purchase_date
+                elif isinstance(holding.purchase_date, datetime):
+                    parsed_purchase_date = holding.purchase_date.date()
+                else:
+                    parsed_purchase_date = datetime.strptime(str(holding.purchase_date).split("T")[0], "%Y-%m-%d").date()
+                holding_days = max(0, (date.today() - parsed_purchase_date).days)
+            except Exception:
+                parsed_purchase_date = date.today()
+                holding_days = 0
+
         # 1. Ingest Canonical MarketDataSnapshot & Verified Clean Candles (400-day lookback)
         snapshot, clean_candles, dq_report = await data_service.get_canonical_snapshot(symbol)
 
@@ -234,7 +250,7 @@ class PortfolioEngine:
         sectors = await data_service.get_sector_indices_data()
         
         holding_symbols = [h.symbol.upper().strip() for h in holdings]
-        candles_map = await data_service.get_multiple_candles_parallel(holding_symbols, interval="day", days=180, concurrency=10)
+        candles_map = await data_service.get_multiple_candles_parallel(holding_symbols, interval="day", days=180, concurrency=8)
         
         holding_analyses: List[HoldingAnalysis] = []
         what_changed: List[str] = []

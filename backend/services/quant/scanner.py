@@ -11,7 +11,9 @@ from backend.models.schemas import (
     RelativeStrengthMetrics,
     StructuredCatalyst,
     HistoricalScanSummary,
-    DataQualityReport
+    DataQualityReport,
+    PositionSizingSuggestion,
+    InstitutionalVolumeQuality
 )
 from backend.models.database import SessionLocal, DBHolding, DBInstrumentMaster, DBHistoricalScan
 from backend.services.market_data.data_service import data_service
@@ -29,6 +31,7 @@ from backend.services.quant.market_engine import market_engine
 from backend.services.quant.sector_engine import sector_engine
 from backend.services.ml.feature_pipeline import FeaturePipeline
 from backend.services.ml.classifier import ml_classifier
+from backend.services.ml.backtest import model_auditor
 from backend.services.news.event_tracker import news_engine
 
 logger = logging.getLogger("systematic_scanner")
@@ -197,9 +200,31 @@ class SystematicStockScanner:
             "SMALL_CAP": []
         }
 
-        # Fetch candles for entire universe concurrently in parallel batches (1-2s total)
+        # Fetch candles and live quotes for entire universe concurrently in rate-safe parallel batches
         all_symbols = [item["symbol"] for item in universe]
-        candles_map = await data_service.get_multiple_candles_parallel(all_symbols, interval="day", days=180, concurrency=20)
+        candles_res, quotes_res = await asyncio.gather(
+            data_service.get_multiple_candles_parallel(all_symbols, interval="day", days=180, concurrency=8),
+            data_service.provider.get_live_quote(all_symbols),
+            return_exceptions=True
+        )
+        candles_map = candles_res if isinstance(candles_res, dict) else {}
+        live_quotes = quotes_res if isinstance(quotes_res, dict) else {}
+
+        # Track persistent leader streaks from recent historical scans
+        streak_map: Dict[str, int] = {}
+        try:
+            prior_scans = db.query(DBHistoricalScan).order_by(DBHistoricalScan.scan_date.desc()).limit(10).all()
+            for r in prior_scans:
+                if not r.top_symbols_json:
+                    continue
+                try:
+                    syms = json.loads(r.top_symbols_json)
+                    for s in syms:
+                        streak_map[s] = streak_map.get(s, 0) + 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # ==========================================
         # STAGE 1 & 2: DATA GATE, LIQUIDITY & SCORING
@@ -242,11 +267,19 @@ class SystematicStockScanner:
             category_survivors[category]["liquid"] += 1
             global_survivors["liquid"] += 1
             
-            # 3. Technical Indicators & Candlesticks
+            # 3. Technical Indicators & Live Quote Integration
             indicators = TechnicalEngine.evaluate_indicators(candles)
-            current_price = candles[-1].close
-            prev_close = candles[-2].close if len(candles) > 1 else current_price
-            daily_chg = round((current_price - prev_close) / (prev_close or 1.0) * 100.0, 2)
+            
+            # Use Live Upstox Real-Time Quote Price if available, otherwise latest completed candle close
+            q = live_quotes.get(symbol) or live_quotes.get(f"NSE_EQ|{symbol}") or {}
+            live_price = float(q.get("price", 0.0))
+            if live_price > 0.0:
+                current_price = live_price
+                daily_chg = float(q.get("change_percent", 0.0))
+            else:
+                current_price = candles[-1].close
+                prev_close = candles[-2].close if len(candles) > 1 else current_price
+                daily_chg = round((current_price - prev_close) / (prev_close or 1.0) * 100.0, 2)
             
             candle_score, candle_patterns = CandlestickEngine.calculate_candle_confirmation_score(candles)
             
@@ -394,6 +427,11 @@ class SystematicStockScanner:
                 validated_at=scan_time
             )
 
+            past_streak = streak_map.get(symbol, 0)
+            current_streak = past_streak + 1
+            is_runner = (current_streak >= 2)
+            streak_desc = f"🔥 {current_streak}-Day Persistent Leader (Continued institutional momentum & valid entry R:R)" if is_runner else None
+
             scored_pools[category].append({
                 "symbol": symbol,
                 "company_name": company_name,
@@ -420,6 +458,9 @@ class SystematicStockScanner:
                 "volume_quality": vol_quality,
                 "portfolio_fit_score": portfolio_fit_score,
                 "composite_rank_score": composite_score,
+                "scan_streak_days": current_streak,
+                "is_multi_day_runner": is_runner,
+                "streak_description": streak_desc,
                 "data_quality": dq_summary,
                 "timestamp": candles[-1].timestamp if candles else scan_time
             })
@@ -569,6 +610,9 @@ class SystematicStockScanner:
                     watch_reasons=watch_reasons,
                     failure_reasons=failure_reasons,
                     risks=risks,
+                    scan_streak_days=item.get("scan_streak_days", 1),
+                    is_multi_day_runner=item.get("is_multi_day_runner", False),
+                    streak_description=item.get("streak_description"),
                     data_quality=item["data_quality"],
                     data_timestamp=item["timestamp"],
                     created_at=scan_time
@@ -584,6 +628,28 @@ class SystematicStockScanner:
             slots_left = 5 - len(top_cat_buys)
             top_cat_watchlist = cat_near_misses[:max(5, slots_left)]
             
+            # Record audit records for all verified BUY candidates
+            for buy_opp in top_cat_buys:
+                try:
+                    model_auditor.record_signal_audit(
+                        symbol=buy_opp.symbol,
+                        signal=buy_opp.signal,
+                        setup_type=buy_opp.setup_type,
+                        entry_low=buy_opp.levels.entry_low or buy_opp.current_price or 0.0,
+                        entry_high=buy_opp.levels.entry_high or buy_opp.current_price or 0.0,
+                        target_1=buy_opp.levels.target_1 or 0.0,
+                        target_2=buy_opp.levels.target_2 or 0.0,
+                        target_3=buy_opp.levels.target_3 or 0.0,
+                        stop_loss=buy_opp.levels.stop_loss or 0.0,
+                        probability_t1=buy_opp.ml_probability.p_t1_before_sl or 0.0,
+                        market_regime=market_regime,
+                        sector=buy_opp.sector,
+                        model_version=buy_opp.ml_probability.model_version or "Heuristic-Rule-Based-v1.0",
+                        holding_days_max=10
+                    )
+                except Exception as audit_err:
+                    logger.warning(f"Could not record signal audit for {buy_opp.symbol}: {audit_err}")
+
             category_survivors[cat_key]["final_selected"] = len(top_cat_buys)
             global_survivors["final_selected"] += len(top_cat_buys)
             
@@ -644,6 +710,23 @@ class SystematicStockScanner:
                 f"Primary Bottleneck: {global_primary_bottleneck}. Review near-miss watchlist opportunities categorized below."
             )
 
+        # Select Top 2 Highest-Conviction Alpha Picks across all qualified BUYs
+        all_buys: List[StockOpportunity] = []
+        for cat_k in ["LARGE_CAP", "MID_CAP", "SMALL_CAP"]:
+            all_buys.extend(category_results[cat_k].candidates)
+
+        def conviction_sort_key(opp: StockOpportunity) -> float:
+            ml_p = opp.ml_probability.p_t1_before_sl if (opp.ml_probability and opp.ml_probability.p_t1_before_sl is not None) else 0.50
+            rr_val = opp.levels.risk_reward_ratio_t1 if (opp.levels and opp.levels.risk_reward_ratio_t1 is not None) else 1.5
+            rs_val = opp.relative_strength.mansfield_rs_50d if (opp.relative_strength and opp.relative_strength.mansfield_rs_50d is not None) else 0.0
+            opp_score = opp.opportunity_score or 50.0
+            streak_bonus = 5.0 if opp.is_multi_day_runner else 0.0
+            
+            return (ml_p * 40.0) + (min(3.0, rr_val) * 15.0) + (opp_score * 0.30) + (max(-10.0, min(20.0, rs_val)) * 0.5) + streak_bonus
+
+        sorted_buys = sorted(all_buys, key=conviction_sort_key, reverse=True)
+        top_conviction_picks = sorted_buys[:2] if len(sorted_buys) >= 2 else sorted_buys
+
         final_response = ScannerScanResponse(
             large_cap=category_results["LARGE_CAP"],
             mid_cap=category_results["MID_CAP"],
@@ -655,6 +738,7 @@ class SystematicStockScanner:
             ),
             total_qualified_count=total_qualified_across_all,
             total_near_misses_count=all_near_misses_count,
+            top_conviction_picks=top_conviction_picks,
             opportunities=all_flattened_top_opportunities,
             buy_candidates_count=all_buy_candidates_count,
             near_misses_count=all_near_misses_count,

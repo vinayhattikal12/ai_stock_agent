@@ -104,25 +104,27 @@ class MarketEngine:
         strong_sectors = [s for s in sector_matrix if s.momentum_score >= 55.0]
         weak_sectors = [s for s in sector_matrix if s.momentum_score < 45.0]
         
-        # Calculate real market breadth
-        advances = sum(1 for s in sector_matrix if s.change_percent_1d > 0)
-        declines = sum(1 for s in sector_matrix if s.change_percent_1d < 0)
-        unchanged = sum(1 for s in sector_matrix if s.change_percent_1d == 0)
-        total_sectors = len(sector_matrix) or 1
+        # Calculate real sector-index breadth from sector indices
+        valid_sectors = [s for s in sector_matrix if s.change_percent_1d is not None]
+        advances = sum(1 for s in valid_sectors if (s.change_percent_1d or 0.0) > 0)
+        declines = sum(1 for s in valid_sectors if (s.change_percent_1d or 0.0) < 0)
+        unchanged = sum(1 for s in valid_sectors if (s.change_percent_1d or 0.0) == 0)
+        total_sectors = len(valid_sectors) or 1
         
         ad_ratio = round(advances / (declines or 1), 2)
-        pct_above = round((advances / total_sectors) * 100.0, 1)
+        pct_positive_sectors = round((advances / total_sectors) * 100.0, 1)
         
         breadth = MarketBreadth(
+            breadth_type="SECTOR_INDEX_BREADTH",
             advances=advances,
             declines=declines,
             unchanged=unchanged,
             ad_ratio=ad_ratio,
-            pct_above_20_ema=pct_above,
-            pct_above_50_ema=pct_above,
-            pct_above_200_ema=pct_above,
-            highs_52w_count=max(0, advances * 2),
-            lows_52w_count=max(0, declines * 2)
+            pct_above_20_ema=None,  # Available only when individual constituent stock MAs are computed
+            pct_above_50_ema=None,
+            pct_above_200_ema=None,
+            highs_52w_count=None,   # Zero fallback: Do not fabricate without full exchange-wide tick feed
+            lows_52w_count=None
         )
         
         # Classify Market Regime (STRONG_BULL, BULL, NEUTRAL, RECOVERY, BEAR, STRESS)

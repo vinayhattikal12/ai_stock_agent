@@ -34,3 +34,21 @@ async def update_token(payload: TokenUpdate):
     """
     settings.UPSTOX_ACCESS_TOKEN = payload.token.strip()
     return {"status": "success", "message": "Upstox Access Token updated successfully."}
+
+@router.post("/universe/sync")
+async def sync_amfi_universe():
+    """
+    Triggers programmatic synchronization and AMFI market-cap classification of the NSE universe.
+    """
+    from backend.services.market_data.universe_manager import AMFIUniverseManager
+    result = await AMFIUniverseManager.sync_amfi_universe()
+    return result
+
+@router.get("/universe/status")
+async def get_universe_status():
+    """
+    Returns current active AMFI market-cap universe distribution and refresh metadata.
+    """
+    from backend.services.market_data.universe_manager import AMFIUniverseManager
+    return AMFIUniverseManager.get_active_universe_summary()
+

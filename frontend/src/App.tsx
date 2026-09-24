@@ -10,6 +10,7 @@ import { PortfolioView } from './components/PortfolioView';
 import { StockDetailView } from './components/StockDetailView';
 import { AuditView } from './components/AuditView';
 import { SettingsView } from './components/SettingsView';
+import { TodaysMoversView } from './components/TodaysMoversView';
 import { api } from './services/api';
 import { 
   MarketStatusResponse, 
@@ -85,6 +86,7 @@ export function MainApp() {
   const [isStockLoading, setIsStockLoading] = useState<boolean>(false);
 
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   // Sync theme class to <html>
   useEffect(() => {
@@ -100,7 +102,18 @@ export function MainApp() {
     fetchInitialData();
   }, []);
 
-  const fetchInitialData = async () => {
+  // Automatic Background Data Refresh every 15 minutes (900,000 ms)
+  useEffect(() => {
+    const refreshInterval = setInterval(() => {
+      console.log('Running 15-minute scheduled market data refresh...');
+      fetchInitialData(true);
+    }, 15 * 60 * 1000);
+
+    return () => clearInterval(refreshInterval);
+  }, []);
+
+  const fetchInitialData = async (silent = false) => {
+    if (!silent) setLoadingInitial(true);
     try {
       const [marketRes, portRes, scanRes] = await Promise.allSettled([
         api.getMarketStatus(),
@@ -113,9 +126,24 @@ export function MainApp() {
         setScanResult(scanRes.value);
       }
     } catch (e) {
-      console.error('Error fetching initial platform data:', e);
+      console.error('Error fetching platform data:', e);
     } finally {
-      setLoadingInitial(false);
+      if (!silent) setLoadingInitial(false);
+    }
+  };
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchInitialData(true);
+      if (selectedStockSymbol && activeTab === 'stock_detail') {
+        const analysis = await api.analyzeStock(selectedStockSymbol);
+        setStockAnalysis(analysis);
+      }
+    } catch (e) {
+      console.error('Error performing manual refresh:', e);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -209,11 +237,15 @@ export function MainApp() {
           setActiveTab(tab);
           if (tab === 'portfolio') {
             api.getPortfolio().then(setPortfolio).catch(console.error);
+          } else if (tab === 'discover') {
+            api.getLatestScan().then(setScanResult).catch(console.error);
           }
         }}
         isDark={isDark}
         setIsDark={setIsDark}
         isUpstoxConnected={true}
+        onRefresh={handleManualRefresh}
+        isRefreshing={isRefreshing}
       />
 
       {/* Main Container */}
@@ -222,7 +254,12 @@ export function MainApp() {
         {activeTab === 'dashboard' && (
           <div className="space-y-2">
             {/* Top Market Status Banner & Index Quotes */}
-            <MarketHeader marketStatus={marketStatus} loading={loadingInitial} />
+            <MarketHeader 
+              marketStatus={marketStatus} 
+              loading={loadingInitial} 
+              onRefresh={handleManualRefresh}
+              isRefreshing={isRefreshing}
+            />
 
             {/* Two Primary Prominent Actions */}
             <ActionButtons
@@ -266,6 +303,11 @@ export function MainApp() {
               alert(`Added ${sym} to your investments.`);
             }}
           />
+        )}
+
+        {/* TODAY'S MOVERS TAB (DETECTION) */}
+        {activeTab === 'movers' && (
+          <TodaysMoversView onSelectStock={handleViewStock} />
         )}
 
         {/* MY INVESTMENTS / PORTFOLIO TAB */}

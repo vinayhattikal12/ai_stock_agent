@@ -8,7 +8,9 @@ import {
   Sun, 
   Moon, 
   Activity,
-  ShieldCheck
+  ShieldCheck,
+  Flame,
+  RefreshCw
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -17,6 +19,8 @@ interface NavbarProps {
   isDark: boolean;
   setIsDark: (dark: boolean) => void;
   isUpstoxConnected: boolean;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -25,10 +29,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   isDark,
   setIsDark,
   isUpstoxConnected,
+  onRefresh,
+  isRefreshing,
 }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: TrendingUp },
     { id: 'discover', label: 'Discover', icon: Search },
+    { id: 'movers', label: 'Today\'s Movers', icon: Flame },
     { id: 'portfolio', label: 'My Investments', icon: Briefcase },
     { id: 'audit', label: 'Audit & Models', icon: BarChart3 },
     { id: 'settings', label: 'Settings', icon: Settings },
@@ -86,7 +93,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
 
           {/* Controls & Status */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2 sm:space-x-3">
             {/* Live Upstox Data Indicator */}
             <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
               <span className="relative flex h-2 w-2">
@@ -96,10 +103,23 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="text-[11px] tracking-tight font-mono">Upstox v2 Live</span>
             </div>
 
+            {/* Quick Refresh Button */}
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                title="Refresh all market data (Auto-refreshes every 15 min)"
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 border border-border-light dark:border-border-dark transition-all disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-500' : ''}`} />
+                <span className="hidden sm:inline text-[11px] font-semibold">{isRefreshing ? 'Updating...' : 'Refresh'}</span>
+              </button>
+            )}
+
             {/* Dark / Light Toggle */}
             <button
               onClick={() => setIsDark(!isDark)}
-              className="p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors"
+              className="p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
               aria-label="Toggle Theme"
             >
               {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}

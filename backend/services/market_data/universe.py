@@ -230,47 +230,43 @@ def seed_instrument_master_if_empty(db_session):
 def get_or_fetch_active_universe(category: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Returns the active tradeable classified universe.
-    Can filter by category: 'LARGE_CAP', 'MID_CAP', 'SMALL_CAP'.
-    When category is None, merges DBInstrumentMaster entries to support universal search across all NSE stocks.
+    Dynamically prioritizes live DBInstrumentMaster entries to prevent staleness & survivorship bias.
     """
-    if category:
-        return [s for s in NSE_RANKED_UNIVERSE if s["market_cap_category"].upper() == category.upper()]
-        
-    # Start with core ranked universe
-    all_stocks = list(NSE_RANKED_UNIVERSE)
-    ranked_symbols = {s["symbol"].upper() for s in all_stocks}
-    
-    # Query additional equities from DBInstrumentMaster
     try:
         from backend.models.database import SessionLocal, DBInstrumentMaster
         db = SessionLocal()
         try:
-            extra_records = db.query(DBInstrumentMaster).filter(DBInstrumentMaster.is_active == True).all()
-            for r in extra_records:
-                sym = (r.symbol or "").upper()
-                if sym and sym not in ranked_symbols:
-                    all_stocks.append({
-                        "symbol": sym,
-                        "name": r.name or sym,
-                        "sector": r.sector or "Equity",
-                        "instrument_key": r.instrument_key,
-                        "market_cap_category": r.market_cap_category or "EQUITY",
-                        "market_cap_rank": r.market_cap_rank
-                    })
-                    ranked_symbols.add(sym)
+            query = db.query(DBInstrumentMaster).filter(DBInstrumentMaster.is_active == True)
+            if category:
+                query = query.filter(DBInstrumentMaster.market_cap_category.ilike(category.upper()))
+            records = query.order_by(DBInstrumentMaster.market_cap_rank.asc()).all()
+            if records and len(records) >= 50:
+                return [{
+                    "symbol": r.symbol.upper(),
+                    "name": r.name or r.symbol,
+                    "sector": r.sector or "Equity",
+                    "instrument_key": r.instrument_key,
+                    "market_cap_category": r.market_cap_category or "EQUITY",
+                    "market_cap_rank": r.market_cap_rank,
+                    "classification_source": r.classification_source,
+                    "classification_date": str(r.classification_date) if r.classification_date else str(date.today())
+                } for r in records]
         finally:
             db.close()
     except Exception as e:
-        logger.debug(f"Could not load additional symbols from DBInstrumentMaster: {e}")
-        
-    return all_stocks
+        logger.debug(f"Could not load universe from DBInstrumentMaster: {e}")
+
+    # Fallback to seeded ranked universe if DB query fails
+    if category:
+        return [s for s in NSE_RANKED_UNIVERSE if s["market_cap_category"].upper() == category.upper()]
+    return list(NSE_RANKED_UNIVERSE)
 
 def get_classified_universe() -> Dict[str, List[Dict[str, Any]]]:
     """
-    Returns dictionary with items segregated by market cap category.
+    Returns dictionary with items segregated by market cap category from live database.
     """
     return {
-        "LARGE_CAP": [s for s in NSE_RANKED_UNIVERSE if s["market_cap_category"] == "LARGE_CAP"],
-        "MID_CAP": [s for s in NSE_RANKED_UNIVERSE if s["market_cap_category"] == "MID_CAP"],
-        "SMALL_CAP": [s for s in NSE_RANKED_UNIVERSE if s["market_cap_category"] == "SMALL_CAP"],
+        "LARGE_CAP": get_or_fetch_active_universe("LARGE_CAP"),
+        "MID_CAP": get_or_fetch_active_universe("MID_CAP"),
+        "SMALL_CAP": get_or_fetch_active_universe("SMALL_CAP"),
     }

@@ -1,5 +1,8 @@
 import logging
 import urllib.parse
+import asyncio
+import time
+import random
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
 import httpx
@@ -38,11 +41,44 @@ SYMBOL_TO_UPSTOX_KEY.update({
     "NIFTY FIN SERVICE": "NSE_INDEX|Nifty Fin Service",
 })
 
+
+class AsyncRateLimiter:
+    """
+    Token-bucket asynchronous rate limiter.
+    Ensures outbound requests stay safely under Upstox API limits (default 8 req/sec).
+    """
+    def __init__(self, max_rate: float = 8.0, time_period: float = 1.0):
+        self.max_rate = max_rate
+        self.time_period = time_period
+        self._tokens = max_rate
+        self._last_update = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                elapsed = now - self._last_update
+                self._last_update = now
+                self._tokens = min(self.max_rate, self._tokens + elapsed * (self.max_rate / self.time_period))
+                
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                
+                needed = (1.0 - self._tokens) * (self.time_period / self.max_rate)
+                await asyncio.sleep(max(0.02, needed))
+
+
 class UpstoxProvider(MarketDataProvider):
     """
     Real Market Data Provider communicating directly with Upstox API V2.
     Translates standard NSE equity symbols to Upstox ISIN instrument keys.
-    Uses persistent HTTP connection pooling for sub-50ms query throughput.
+    Features:
+    - Asynchronous rate limiting to eliminate 429 Too Many Requests.
+    - Automatic exponential backoff + jitter for transient failures.
+    - Safe batch chunking (max 25 symbols) to prevent 400 Bad Request.
+    - Sub-50ms connection pooling with persistent HTTP keep-alive.
     """
     
     def __init__(self, access_token: Optional[str] = None):
@@ -53,14 +89,43 @@ class UpstoxProvider(MarketDataProvider):
             "Authorization": f"Bearer {self.access_token}",
             "Api-Version": "2.0"
         }
-        self.timeout = httpx.Timeout(10.0, connect=3.0)
+        self.timeout = httpx.Timeout(12.0, connect=4.0)
         self._client: Optional[httpx.AsyncClient] = None
+        self._rate_limiter = AsyncRateLimiter(max_rate=8.0, time_period=1.0)
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            limits = httpx.Limits(max_connections=100, max_keepalive_connections=50, keepalive_expiry=30.0)
+            limits = httpx.Limits(max_connections=50, max_keepalive_connections=30, keepalive_expiry=60.0)
             self._client = httpx.AsyncClient(timeout=self.timeout, limits=limits)
         return self._client
+
+    async def _execute_with_retry(self, request_fn, description: str = "API request", max_retries: int = 3):
+        """
+        Executes HTTP call with rate limiting and exponential backoff on 429 / 5xx / timeouts.
+        """
+        for attempt in range(1, max_retries + 1):
+            await self._rate_limiter.acquire()
+            try:
+                resp = await request_fn()
+                if resp.status_code == 429:
+                    wait_time = 0.6 * (2 ** (attempt - 1)) + random.uniform(0.1, 0.3)
+                    logger.warning(f"Upstox 429 Too Many Requests on {description}. Backing off for {wait_time:.2f}s (attempt {attempt}/{max_retries})...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                elif resp.status_code in [500, 502, 503, 504]:
+                    wait_time = 0.5 * attempt + random.uniform(0.1, 0.2)
+                    logger.warning(f"Upstox {resp.status_code} on {description}. Retrying in {wait_time:.2f}s (attempt {attempt}/{max_retries})...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                return resp
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+                wait_time = 0.5 * attempt
+                logger.warning(f"Network transient issue on {description}: {e}. Retrying in {wait_time:.2f}s (attempt {attempt}/{max_retries})...")
+                await asyncio.sleep(wait_time)
+            except Exception as e:
+                logger.error(f"Unexpected error executing {description}: {e}")
+                break
+        return None
 
     def _format_instrument_key(self, symbol: str, exchange: str = "NSE_EQ") -> str:
         """
@@ -179,41 +244,82 @@ class UpstoxProvider(MarketDataProvider):
     async def get_live_quote(self, instrument_keys: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Fetch quotes for one or multiple instrument keys from Upstox /v2/market-quote/quotes.
+        Automatically chunks requests into safe batches of max 25 keys to eliminate 400 Bad Request.
         """
         if not instrument_keys:
             return {}
             
-        formatted_keys = [self._format_instrument_key(k) for k in instrument_keys]
-        keys_param = ",".join(formatted_keys)
-        url = f"{self.base_url}/v2/market-quote/quotes"
-        params = {"instrument_key": keys_param}
-        
-        try:
-            client = self._get_client()
-            resp = await client.get(url, headers=self.headers, params=params)
-            if resp.status_code == 200:
-                payload = resp.json()
-                data = payload.get("data", {})
-                results = {}
-                for key, raw_quote in data.items():
-                    # Map Upstox key back to human symbol
-                    sym = key.split(":")[-1] if ":" in key else key
-                    
-                    # Reverse lookup symbol if it is an ISIN
-                    found_sym = sym
-                    for s, ik in SYMBOL_TO_UPSTOX_KEY.items():
-                        if ik.endswith(sym) or sym in ik:
-                            found_sym = s
-                            break
-                            
-                    results[found_sym] = DataNormalizer.normalize_upstox_quote(found_sym, raw_quote)
-                return results
-            else:
-                logger.warning(f"Upstox quote API error {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error(f"Error fetching live quote from Upstox: {e}")
+        # Sanitize keys
+        formatted_keys = []
+        for k in instrument_keys:
+            if not k:
+                continue
+            fmt = self._format_instrument_key(k)
+            if fmt and fmt not in formatted_keys:
+                formatted_keys.append(fmt)
+
+        if not formatted_keys:
+            return {}
+
+        results = {}
+        client = self._get_client()
+        BATCH_SIZE = 25
+        batches = [formatted_keys[i:i + BATCH_SIZE] for i in range(0, len(formatted_keys), BATCH_SIZE)]
+
+        for batch in batches:
+            keys_param = ",".join(batch)
+            url = f"{self.base_url}/v2/market-quote/quotes"
+            params = {"instrument_key": keys_param}
             
-        return {}
+            async def do_req():
+                return await client.get(url, headers=self.headers, params=params)
+
+            resp = await self._execute_with_retry(do_req, description=f"live quotes for {len(batch)} symbols")
+            
+            if resp and resp.status_code == 200:
+                try:
+                    payload = resp.json()
+                    data = payload.get("data", {})
+                    for key, raw_quote in data.items():
+                        norm_key = key.replace(":", "|")
+                        sym = key.split(":")[-1] if ":" in key else key
+                        found_sym = sym
+                        for s, ik in SYMBOL_TO_UPSTOX_KEY.items():
+                            if ik == norm_key or ik == key or ik.endswith(sym) or sym.upper() == s.upper():
+                                found_sym = s
+                                break
+                        normalized = DataNormalizer.normalize_upstox_quote(found_sym, raw_quote)
+                        results[found_sym] = normalized
+                        results[sym] = normalized
+                        results[norm_key] = normalized
+                        results[key] = normalized
+                except Exception as e:
+                    logger.warning(f"Error parsing live quote response: {e}")
+            elif resp and resp.status_code == 400:
+                logger.warning(f"Upstox 400 Bad Request on batch quote ({keys_param[:60]}...). Falling back to single queries...")
+                # Query keys individually to bypass single-symbol corruption
+                for single_key in batch:
+                    try:
+                        await self._rate_limiter.acquire()
+                        s_resp = await client.get(url, headers=self.headers, params={"instrument_key": single_key})
+                        if s_resp.status_code == 200:
+                            s_data = s_resp.json().get("data", {})
+                            for k_res, raw_q in s_data.items():
+                                norm_k = k_res.replace(":", "|")
+                                s_sym = k_res.split(":")[-1] if ":" in k_res else k_res
+                                found_s = s_sym
+                                for s, ik in SYMBOL_TO_UPSTOX_KEY.items():
+                                    if ik == norm_k or ik == k_res or ik.endswith(s_sym) or s_sym.upper() == s.upper():
+                                        found_s = s
+                                        break
+                                norm_res = DataNormalizer.normalize_upstox_quote(found_s, raw_q)
+                                results[found_s] = norm_res
+                                results[s_sym] = norm_res
+                                results[norm_k] = norm_res
+                    except Exception:
+                        pass
+                        
+        return results
 
     async def get_historical_candles(
         self,
@@ -225,15 +331,30 @@ class UpstoxProvider(MarketDataProvider):
         """
         Fetches historical candles from Upstox API v2.
         Endpoint: /v2/historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}
+        Guarded against invalid date order, special char escaping, and 429/400 errors.
         """
+        if not instrument_key:
+            return []
+            
         formatted_raw_key = self._format_instrument_key(instrument_key)
+        if not formatted_raw_key:
+            return []
         encoded_key = urllib.parse.quote(formatted_raw_key, safe='')
         
-        # Default date range: past 180 days
+        today_dt = date.today()
         if not to_date:
-            to_date = date.today().strftime("%Y-%m-%d")
+            to_date = today_dt.strftime("%Y-%m-%d")
         if not from_date:
-            from_date = (date.today() - timedelta(days=200)).strftime("%Y-%m-%d")
+            from_date = (today_dt - timedelta(days=200)).strftime("%Y-%m-%d")
+            
+        # Ensure chronological sanity
+        try:
+            f_dt = datetime.strptime(from_date, "%Y-%m-%d").date()
+            t_dt = datetime.strptime(to_date, "%Y-%m-%d").date()
+            if f_dt >= t_dt:
+                from_date = (t_dt - timedelta(days=180)).strftime("%Y-%m-%d")
+        except Exception:
+            pass
             
         upstox_interval = interval
         if interval in ["1d", "D", "day", "daily"]:
@@ -248,25 +369,33 @@ class UpstoxProvider(MarketDataProvider):
             upstox_interval = "30minute"
 
         url = f"{self.base_url}/v2/historical-candle/{encoded_key}/{upstox_interval}/{to_date}/{from_date}"
-        
-        try:
-            client = self._get_client()
-            resp = await client.get(url, headers=self.headers)
-            if resp.status_code == 200:
+        client = self._get_client()
+
+        async def do_req():
+            return await client.get(url, headers=self.headers)
+
+        resp = await self._execute_with_retry(do_req, description=f"candles for {instrument_key}")
+
+        if resp and resp.status_code == 200:
+            try:
                 payload = resp.json()
                 raw_candles = payload.get("data", {}).get("candles", [])
                 return DataNormalizer.normalize_upstox_candles(raw_candles)
-            else:
-                logger.warning(f"Upstox candle API returned {resp.status_code} for {formatted_raw_key}: {resp.text}")
-                # Try calling without from_date (Upstox supports /v2/historical-candle/{key}/{interval}/{to_date})
-                alt_url = f"{self.base_url}/v2/historical-candle/{encoded_key}/{upstox_interval}/{to_date}"
+            except Exception as e:
+                logger.warning(f"Error parsing candles for {instrument_key}: {e}")
+                return []
+        elif resp and resp.status_code in [400, 404]:
+            # Fallback to single to_date endpoint: /v2/historical-candle/{key}/{interval}/{to_date}
+            alt_url = f"{self.base_url}/v2/historical-candle/{encoded_key}/{upstox_interval}/{to_date}"
+            try:
+                await self._rate_limiter.acquire()
                 alt_resp = await client.get(alt_url, headers=self.headers)
                 if alt_resp.status_code == 200:
                     raw_candles = alt_resp.json().get("data", {}).get("candles", [])
                     return DataNormalizer.normalize_upstox_candles(raw_candles)
-        except Exception as e:
-            logger.error(f"Exception fetching historical candles for {instrument_key}: {e}")
-            
+            except Exception:
+                pass
+                
         return []
 
     async def get_intraday_candles(
@@ -278,20 +407,28 @@ class UpstoxProvider(MarketDataProvider):
         Fetches intraday candles for current trading day.
         Endpoint: /v2/historical-candle/intraday/{instrument_key}/{interval}
         """
+        if not instrument_key:
+            return []
+            
         formatted_raw_key = self._format_instrument_key(instrument_key)
+        if not formatted_raw_key:
+            return []
         encoded_key = urllib.parse.quote(formatted_raw_key, safe='')
         url = f"{self.base_url}/v2/historical-candle/intraday/{encoded_key}/{interval}"
+        client = self._get_client()
         
-        try:
-            client = self._get_client()
-            resp = await client.get(url, headers=self.headers)
-            if resp.status_code == 200:
+        async def do_req():
+            return await client.get(url, headers=self.headers)
+            
+        resp = await self._execute_with_retry(do_req, description=f"intraday candles for {instrument_key}")
+        if resp and resp.status_code == 200:
+            try:
                 payload = resp.json()
                 raw_candles = payload.get("data", {}).get("candles", [])
                 return DataNormalizer.normalize_upstox_candles(raw_candles)
-        except Exception as e:
-            logger.error(f"Error fetching intraday candles for {instrument_key}: {e}")
-            
+            except Exception as e:
+                logger.warning(f"Error parsing intraday candles for {instrument_key}: {e}")
+                
         return []
 
     async def get_market_depth(self, instrument_key: str) -> Dict[str, Any]:
