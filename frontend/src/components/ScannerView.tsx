@@ -247,6 +247,39 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     Fit: {opp.portfolio_fit_score.toFixed(0)}/100
                   </span>
                 )}
+
+                {/* Overbought / Extended Entry Warning */}
+                {opp.is_extended_entry && (
+                  <span 
+                    title={`Price is +${opp.extension_pct_ema20?.toFixed(1)}% above 20-EMA. Entry is overextended; pullbacks are favored.`}
+                    className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                  >
+                    <AlertTriangle className="w-3 h-3 text-amber-500" />
+                    <span>Overbought (+{opp.extension_pct_ema20 ? opp.extension_pct_ema20.toFixed(1) : ''}% vs 20-EMA)</span>
+                  </span>
+                )}
+
+                {/* Street Consensus Target Check Warning */}
+                {opp.street_target_check?.exceeds_street_high && (
+                  <span 
+                    title={`Model Target 1 (${formatINR(opp.levels?.target_1)}) exceeds the highest Street analyst target (${formatINR(opp.street_target_check.street_target_high)}). Exercise caution.`}
+                    className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30"
+                  >
+                    <ShieldAlert className="w-3 h-3 text-rose-500" />
+                    <span>T1 &gt; Street High ({formatINR(opp.street_target_check.street_target_high)})</span>
+                  </span>
+                )}
+
+                {/* Fundamental Disqualification Tag */}
+                {opp.fundamental_snapshot?.is_fundamentally_disqualified && (
+                  <span 
+                    title={`Fundamental Risk: ${opp.fundamental_snapshot.disqualification_reason || 'Loss-making / negative EPS growth'}`}
+                    className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30"
+                  >
+                    <ShieldAlert className="w-3 h-3 text-rose-500" />
+                    <span>Fundamental Risk</span>
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center space-x-2 text-xs text-slate-500 flex-wrap">
@@ -355,6 +388,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             <span className="text-[10px] uppercase text-slate-500 font-sans font-semibold">P(T1 before SL)</span>
             <div className="text-sm font-bold text-blue-600 dark:text-blue-400 mt-1 flex items-center space-x-1">
               <span>{opp.ml_probability?.p_t1_before_sl !== undefined && opp.ml_probability.p_t1_before_sl !== null ? `${Math.round(opp.ml_probability.p_t1_before_sl * 100)}%` : '—'}</span>
+              <span className={`text-[9px] px-1 py-0.5 rounded font-mono font-normal ${
+                opp.ml_probability?.calibration_method?.toLowerCase().includes('isotonic') 
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+              }`}>
+                {opp.ml_probability?.calibration_method?.toLowerCase().includes('isotonic') ? 'Calibrated' : 'Rule-Based'}
+              </span>
             </div>
             <span className="text-[10px] text-slate-500 font-sans">
               Horizon: {opp.ml_probability?.expected_days_min || 5}–{opp.ml_probability?.expected_days_max || 10} days

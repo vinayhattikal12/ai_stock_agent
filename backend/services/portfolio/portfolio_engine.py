@@ -115,9 +115,20 @@ class PortfolioEngine:
         sec_match = next((s for s in sectors_data if sector.lower() in s["name"].lower()), None)
         sector_trend = sec_match["trend"] if sec_match else "NEUTRAL"
         
+        # Chandelier Trailing Stop for profitable runner positions
+        atr_val = indicators.atr_14 if (indicators and indicators.atr_14) else (current_price * 0.02)
+        chandelier_stop = TargetStopEngine.calculate_chandelier_trailing_stop(clean_candles, atr=atr_val, multiplier=2.0)
+
         # Thesis evaluation
         thesis_status, thesis_points = thesis_engine.evaluate_thesis(
-            clean_candles, indicators, float(holding.buy_price), rs_20d or 0.0, sector_trend
+            candles=clean_candles,
+            indicators=indicators,
+            buy_price=float(holding.buy_price),
+            rs_20d=rs_20d or 0.0,
+            sector_trend=sector_trend,
+            holding_days=holding_days,
+            is_volume_climax=vol_metrics.is_volume_climax,
+            exhaustion_risk=vol_metrics.exhaustion_risk
         ) if clean_candles else ("STABLE", ["Awaiting verified market session data feed."])
         
         # Dynamic Action Classifier with Pyramiding Guardrails & Staged Exits
@@ -146,6 +157,10 @@ class PortfolioEngine:
             signal = "INSUFFICIENT DATA"
         elif thesis_status == "BROKEN" or staged_plan.current_stage == "STOP_LOSS_EXIT" or (sl_price is not None and current_price <= sl_price):
             signal = "SELL"
+        elif pnl_pct > 3.0 and chandelier_stop is not None and current_price < chandelier_stop:
+            signal = "REDUCE"
+        elif vol_metrics.is_volume_climax and pnl_pct > 2.0:
+            signal = "REDUCE"
         elif staged_plan.current_stage == "TIME_DECAY_EXIT_TRIGGERED":
             signal = "REDUCE"
         elif staged_plan.current_stage in ["T1_PROFIT_TAKEN_BREAKEVEN_ACTIVE", "T2_PROFIT_TAKEN_RUNNER_ACTIVE", "T3_COMPLETED"]:

@@ -15,7 +15,10 @@ class ThesisEngine:
         indicators: TechnicalIndicators,
         buy_price: float,
         rs_20d: float,
-        sector_trend: str
+        sector_trend: str,
+        holding_days: int = 0,
+        is_volume_climax: bool = False,
+        exhaustion_risk: str = "LOW"
     ) -> Tuple[str, List[str]]:
         """
         Returns (thesis_status, thesis_points)
@@ -37,7 +40,7 @@ class ThesisEngine:
         is_above_ema50 = (current_price >= ema_50) if ema_50 is not None else True
         
         # 1. Broken Thesis check
-        if ema_200 is not None and current_price < ema_200 and pnl_pct < -5.0:
+        if ema_200 is not None and current_price < ema_200 and pnl_pct < -4.0:
             points.append("Price violated 200-day long-term moving average with distribution.")
             points.append("Underlying trend structure compromised; risk mitigation required.")
             return "BROKEN", points
@@ -46,9 +49,22 @@ class ThesisEngine:
             points.append("Price fell below 50 EMA accompanied by persistent relative underperformance.")
             points.append(f"Sector benchmark ({sector_trend}) is experiencing heavy rotation out.")
             return "BROKEN", points
+
+        # Volume Climax / Exhaustion Risk at target highs
+        if is_volume_climax or exhaustion_risk in ["HIGH", "EXTREME"]:
+            points.append("Volume climax signature detected (extreme volume spike with rejection / extended stretch).")
+            points.append("Elevated risk of sharp pullback / exhaustion; consider booking partial profits.")
+            if pnl_pct > 3.0:
+                return "WEAKENING", points
+
+        # Time Decay / Dead Consolidation check
+        if holding_days >= 8 and abs(pnl_pct) < 1.5 and rs_20d < 0.0:
+            points.append(f"Holding duration ({holding_days} days) exceeded active swing window with no directional impulse.")
+            points.append("Capital locked in dead consolidation; consider reallocating to higher momentum setups.")
+            return "WEAKENING", points
             
         # 2. Strengthening Thesis
-        if is_above_ema20 and rsi is not None and rsi > 58 and rs_20d > 2.0 and pnl_pct > 2.0:
+        if is_above_ema20 and rsi is not None and rsi > 58 and rs_20d > 1.5 and pnl_pct > 1.5:
             points.append("Price holding firmly above 20 EMA with positive RSI momentum expansion.")
             points.append(f"Relative strength vs NIFTY is expanding (+{rs_20d:.1f}% over 20 days).")
             points.append("Volume profile indicates steady institutional accumulation.")

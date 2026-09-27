@@ -243,18 +243,33 @@ class StockDetailService:
             why_setup.append(f"Candlestick Trigger: {patterns[0].name} ({patterns[0].description})")
 
         risks = [
-            f"Stop Loss Price: ₹{levels.stop_loss:,.2f} ({levels.stop_reason})" if levels.stop_loss is not None else "Stop Loss: Structural level pending",
-            f"Target 1 Price: ₹{levels.target_1:,.2f} (1:{levels.target_1_r_multiple:.1f}R)" if levels.target_1 is not None else "Target 1: Pending structure",
-            f"Regime Scale: {market_status.regime} (Policy: {market_status.regime_policy.status_label})"
-        ]
+        # Fundamental Snapshot & Street Consensus Cross-Check
+        from backend.services.market_data.fundamental_service import fundamental_service
+        from backend.models.schemas import StreetTargetCheck
+        fund_obj = fundamental_service.get_fundamentals_for_symbol(sym, current_price)
+        street_check_dict = fundamental_service.check_street_analyst_consensus(sym, levels.target_1)
+        street_target_check_obj = StreetTargetCheck(**street_check_dict)
 
-        invalidation = f"Daily close below ₹{levels.stop_loss:.2f} or Mansfield RS crossing below zero on heavy volume." if levels.stop_loss is not None else None
+        dist_ema20 = round(((current_price - indicators.ema_20) / indicators.ema_20 * 100.0), 1) if indicators.ema_20 and indicators.ema_20 > 0 else 0.0
+        is_extended = (dist_ema20 > 25.0 and (indicators.rsi_14 or 50.0) > 70.0)
+        if is_extended:
+            risks.append(f"Overextended entry: +{dist_ema20:.1f}% above 20-EMA (Elevated pullback risk).")
+        if street_target_check_obj.exceeds_street_high and street_target_check_obj.warning_message:
+            risks.append(street_target_check_obj.warning_message)
 
         fundamental_snapshot = {
             "status": "Verified Upstox API feed",
             "sector": sector,
             "turnover_cr_20d": vol_metrics.avg_turnover_cr_20d,
-            "candles_analyzed": dq_report.candle_count
+            "candles_analyzed": dq_report.candle_count,
+            "pe_ratio": fund_obj.pe_ratio,
+            "pb_ratio": fund_obj.pb_ratio,
+            "debt_to_equity": fund_obj.debt_to_equity,
+            "roce_pct": fund_obj.roce_pct,
+            "roe_pct": fund_obj.roe_pct,
+            "market_cap_cr": fund_obj.market_cap_cr,
+            "is_profitable_latest_quarter": fund_obj.is_profitable_latest_quarter,
+            "yoy_eps_growth_pct": fund_obj.yoy_eps_growth_pct
         }
 
         return StockFullAnalysisResponse(
@@ -286,6 +301,9 @@ class StockDetailService:
             catalyst_score=catalyst_score,
             relative_strength=rs_metrics,
             fundamental_snapshot=fundamental_snapshot,
+            street_target_check=street_target_check_obj,
+            is_extended_entry=is_extended,
+            extension_pct_ema20=dist_ema20,
             invalidation_condition=invalidation,
             snapshot=snapshot,
             data_quality=dq_report,

@@ -115,11 +115,35 @@ class FactorEngine:
         )
         volume_score = round(max(0.0, min(100.0, rvol_pts + turnover_pts + trend_pts)), 1)
 
+        # Overbought / Extended Entry Check (>25% above 20-EMA and RSI > 70)
+        dist_ema20 = ((c_price - indicators.ema_20) / indicators.ema_20 * 100.0) if indicators.ema_20 and indicators.ema_20 > 0 else 0.0
+        rsi_val = indicators.rsi_14 or 50.0
+        is_overextended = (dist_ema20 > 25.0 and rsi_val > 70.0)
+        if is_overextended:
+            # Penalize parabolic extensions to prevent chasing late-stage tops
+            momentum_score = max(30.0, momentum_score - 20.0)
+
         # 6. Quality & Fundamentals Score (0 - 100) -> 10%
         all_highs = [x.high for x in candles]
         high_52w = max(all_highs) if all_highs else c_price
         drawdown_52w = (high_52w - c_price) / (high_52w or 1.0) * 100.0
-        quality_score = round(max(0.0, min(100.0, 100.0 - (drawdown_52w * 2.5))), 1)
+        price_struct_pts = max(0.0, min(50.0, 50.0 - (drawdown_52w * 1.5)))
+
+        from backend.services.market_data.fundamental_service import fundamental_service
+        sym_name = getattr(candles[0], 'symbol', '') if candles else ''
+        fund = fundamental_service.get_fundamentals_for_symbol(sym_name)
+        
+        fund_pts = 25.0
+        if fund.is_profitable_latest_quarter:
+            fund_pts += 15.0
+            if fund.yoy_eps_growth_pct and fund.yoy_eps_growth_pct >= 15.0:
+                fund_pts += 10.0
+            elif fund.yoy_eps_growth_pct and fund.yoy_eps_growth_pct > 0.0:
+                fund_pts += 5.0
+        else:
+            fund_pts = 0.0  # Loss-making company penalized
+
+        quality_score = round(max(0.0, min(100.0, price_struct_pts + fund_pts)), 1)
 
         # 7. Catalyst & News Score (0 - 100) -> 10%
         cat_score = round(catalyst_score, 1) if catalyst_score is not None else 50.0

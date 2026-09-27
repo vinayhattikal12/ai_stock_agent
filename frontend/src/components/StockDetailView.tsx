@@ -47,6 +47,8 @@ export const StockDetailView: React.FC<StockDetailViewProps> = ({
     factors: true,
     technical: true,
     ml: true,
+    fundamental: true,
+    street_target: true,
     patterns: false,
     relative_strength: true,
     catalysts: false,
@@ -118,6 +120,9 @@ export const StockDetailView: React.FC<StockDetailViewProps> = ({
     catalyst_score,
     relative_strength,
     fundamental_snapshot,
+    street_target_check,
+    is_extended_entry,
+    extension_pct_ema20,
     invalidation_condition,
     data_quality
   } = analysis;
@@ -242,6 +247,26 @@ export const StockDetailView: React.FC<StockDetailViewProps> = ({
           <span>Quality: <strong className="text-emerald-600 dark:text-emerald-400 font-bold">{analysis.snapshot?.data_quality_status || data_quality?.status || 'GOOD'}</strong></span>
         </div>
       </div>
+
+      {/* Overbought / Extended Entry Alert Banner */}
+      {is_extended_entry && (
+        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 flex items-start space-x-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <strong>OVERBOUGHT EXTENSION GATE:</strong> Current price is +{extension_pct_ema20 ? extension_pct_ema20.toFixed(1) : ''}% above the 20-day EMA. Entering now poses poor risk/reward asymmetry. Recommended action: Wait for a mean-reverting pullback toward 20-EMA before initiating longs.
+          </div>
+        </div>
+      )}
+
+      {/* Street Analyst Target Sanity Warning Banner */}
+      {street_target_check?.exceeds_street_high && (
+        <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-800 dark:text-rose-300 flex items-start space-x-2.5">
+          <ShieldAlert className="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <strong>STREET CONSENSUS CAUTION:</strong> {street_target_check.warning_note || `Model Target 1 (${formatINR(levels?.target_1)}) exceeds the highest sell-side analyst price target (${formatINR(street_target_check.street_target_high)}).`}
+          </div>
+        </div>
+      )}
 
       {/* Insufficient Data Notice Banner if Applicable */}
       {isInsufficientData && (
@@ -640,6 +665,144 @@ export const StockDetailView: React.FC<StockDetailViewProps> = ({
                   {relative_strength?.rs_trend || 'FLAT'}
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* 5. Fundamental Quality & Earnings Sanity */}
+        <div className="rounded-2xl bg-background-cardLight dark:bg-background-cardDark border border-border-light dark:border-border-dark overflow-hidden shadow-subtle">
+          <button
+            onClick={() => toggleSection('fundamental')}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+          >
+            <div className="flex items-center space-x-2.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-500" />
+              <span className="text-sm font-bold text-slate-900 dark:text-white">
+                Fundamental Health & Earnings Integrity
+              </span>
+              {fundamental_snapshot?.is_fundamentally_disqualified && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30">
+                  DISQUALIFIED FROM BUY
+                </span>
+              )}
+            </div>
+            {expandedSections.fundamental ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+          </button>
+
+          {expandedSections.fundamental && (
+            <div className="p-4 pt-0 border-t border-border-light dark:border-border-dark space-y-3">
+              {fundamental_snapshot?.is_fundamentally_disqualified && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/40 text-xs text-rose-800 dark:text-rose-300 flex items-start space-x-2">
+                  <ShieldAlert className="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong>Fundamental Veto:</strong> {fundamental_snapshot.disqualification_reason || 'Company has severe earnings contraction or is loss-making.'} (Cannot qualify as a BUY candidate).
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center font-mono text-xs">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/40">
+                  <span className="text-[10px] uppercase text-slate-500 font-sans">P/E Ratio</span>
+                  <div className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">
+                    {fundamental_snapshot?.pe_ratio !== undefined && fundamental_snapshot.pe_ratio !== null ? `${fundamental_snapshot.pe_ratio.toFixed(1)}x` : '—'}
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/40">
+                  <span className="text-[10px] uppercase text-slate-500 font-sans">YoY Revenue Growth</span>
+                  <div className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">
+                    {fundamental_snapshot?.quarterly_revenue_growth_yoy !== undefined && fundamental_snapshot.quarterly_revenue_growth_yoy !== null ? (
+                      <span className={fundamental_snapshot.quarterly_revenue_growth_yoy >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
+                        {fundamental_snapshot.quarterly_revenue_growth_yoy >= 0 ? '+' : ''}{fundamental_snapshot.quarterly_revenue_growth_yoy.toFixed(1)}%
+                      </span>
+                    ) : '—'}
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/40">
+                  <span className="text-[10px] uppercase text-slate-500 font-sans">YoY Profit / EPS Growth</span>
+                  <div className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">
+                    {fundamental_snapshot?.quarterly_profit_growth_yoy !== undefined && fundamental_snapshot.quarterly_profit_growth_yoy !== null ? (
+                      <span className={fundamental_snapshot.quarterly_profit_growth_yoy >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
+                        {fundamental_snapshot.quarterly_profit_growth_yoy >= 0 ? '+' : ''}{fundamental_snapshot.quarterly_profit_growth_yoy.toFixed(1)}%
+                      </span>
+                    ) : '—'}
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/40">
+                  <span className="text-[10px] uppercase text-slate-500 font-sans">ROE</span>
+                  <div className="text-sm font-bold mt-1 text-slate-800 dark:text-slate-200">
+                    {fundamental_snapshot?.roe !== undefined && fundamental_snapshot.roe !== null ? `${fundamental_snapshot.roe.toFixed(1)}%` : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 6. Street Analyst Consensus Sanity Check */}
+        <div className="rounded-2xl bg-background-cardLight dark:bg-background-cardDark border border-border-light dark:border-border-dark overflow-hidden shadow-subtle">
+          <button
+            onClick={() => toggleSection('street_target')}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+          >
+            <div className="flex items-center space-x-2.5">
+              <Target className="w-4 h-4 text-blue-500" />
+              <span className="text-sm font-bold text-slate-900 dark:text-white">
+                Street Analyst Consensus Target Sanity Check
+              </span>
+            </div>
+            {expandedSections.street_target ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+          </button>
+
+          {expandedSections.street_target && (
+            <div className="p-4 pt-0 border-t border-border-light dark:border-border-dark space-y-3">
+              {street_target_check?.has_street_coverage ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center font-mono text-xs">
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-border-light dark:border-border-dark">
+                      <span className="text-[10px] uppercase text-slate-500 font-sans">Street Median Target</span>
+                      <div className="text-base font-bold text-slate-800 dark:text-slate-200 mt-1">
+                        {street_target_check.street_target_median ? formatINR(street_target_check.street_target_median) : '—'}
+                      </div>
+                      <span className="text-[9px] text-slate-400 font-sans">
+                        T1 vs Median: {street_target_check.target1_vs_street_median_pct !== undefined ? `${street_target_check.target1_vs_street_median_pct >= 0 ? '+' : ''}${street_target_check.target1_vs_street_median_pct.toFixed(1)}%` : '—'}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-border-light dark:border-border-dark">
+                      <span className="text-[10px] uppercase text-slate-500 font-sans">Street High Target</span>
+                      <div className="text-base font-bold text-slate-800 dark:text-slate-200 mt-1">
+                        {street_target_check.street_target_high ? formatINR(street_target_check.street_target_high) : '—'}
+                      </div>
+                      <span className="text-[9px] text-slate-400 font-sans">
+                        T1 vs High: {street_target_check.target1_vs_street_high_pct !== undefined ? `${street_target_check.target1_vs_street_high_pct >= 0 ? '+' : ''}${street_target_check.target1_vs_street_high_pct.toFixed(1)}%` : '—'}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-500/30">
+                      <span className="text-[10px] uppercase text-blue-600 dark:text-blue-400 font-sans font-bold">Model Target 1</span>
+                      <div className="text-base font-bold text-blue-600 dark:text-blue-400 mt-1">
+                        {levels?.target_1 ? formatINR(levels.target_1) : '—'}
+                      </div>
+                      <span className="text-[9px] text-slate-500 font-sans">
+                        {street_target_check.exceeds_street_high ? 'Exceeds High Target ⚠️' : 'Within Street Range ✓'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {street_target_check.warning_note && (
+                    <p className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2.5 rounded-xl border border-amber-200 dark:border-amber-800/40 leading-relaxed">
+                      ℹ️ {street_target_check.warning_note}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-slate-500 dark:text-slate-400 italic">
+                  No Street analyst consensus target coverage available for this ticker. Targets are generated purely via deterministic structural price action & ATR multiples.
+                </p>
+              )}
             </div>
           )}
         </div>

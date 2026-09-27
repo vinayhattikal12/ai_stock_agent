@@ -115,79 +115,115 @@ class LiveNewsEventEngine:
     @classmethod
     async def fetch_and_sync_live_announcements(cls) -> int:
         """
-        Downloads latest corporate announcements from exchange API and saves to DBNewsCatalyst.
+        Downloads latest corporate announcements from exchange API (NSE + BSE fallback) and saves to DBNewsCatalyst.
         """
-        url = "https://www.nseindia.com/api/corporate-announcements?index=equities"
+        nse_url = "https://www.nseindia.com/api/corporate-announcements?index=equities"
+        bse_url = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=Company+Update&strPrevDate=&strScrip=&strSearch=P&strToDate=&strType=C"
+        
+        items = []
+        source_label = "NSE Corporate Announcements"
+
+        # 1. Primary Attempt: NSE API with session bootstrap
         try:
-            async with httpx.AsyncClient(headers=cls.NSE_HEADERS, timeout=10.0) as client:
-                # Bootstrap cookie
+            async with httpx.AsyncClient(headers=cls.NSE_HEADERS, timeout=12.0, follow_redirects=True) as client:
                 try:
-                    await client.get("https://www.nseindia.com", timeout=4.0)
+                    await client.get("https://www.nseindia.com", timeout=5.0)
                 except Exception:
                     pass
 
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    logger.warning(f"NSE Announcements API returned {resp.status_code}")
-                    return 0
-
-                items = resp.json()
-                if not isinstance(items, list):
-                    return 0
-
-                db = SessionLocal()
-                new_count = 0
-                try:
-                    for item in items[:100]:
-                        symbol = item.get("symbol", "").upper().strip()
-                        desc = item.get("desc", "").strip()
-                        att = item.get("an_dt", "")
-                        if not symbol or not desc:
-                            continue
-
-                        event_type, direction, materiality, time_horizon = cls.classify_headline(desc)
-                        
-                        # Parse published date
-                        pub_dt = datetime.utcnow()
-                        try:
-                            pub_dt = datetime.strptime(att, "%d-%b-%Y %H:%M:%S")
-                        except Exception:
-                            pass
-
-                        # Check if already in DB
-                        existing = db.query(DBNewsCatalyst).filter(
-                            DBNewsCatalyst.symbol == symbol,
-                            DBNewsCatalyst.headline == desc
-                        ).first()
-
-                        if not existing:
-                            cat = DBNewsCatalyst(
-                                symbol=symbol,
-                                event_type=event_type,
-                                direction=direction,
-                                materiality=materiality,
-                                time_horizon=time_horizon,
-                                headline=desc,
-                                source="NSE Corporate Announcements",
-                                published_at=pub_dt,
-                                days_away=None,
-                                raw_details=item.get("attchmntText", "")
-                            )
-                            db.add(cat)
-                            new_count += 1
-
-                    db.commit()
-                    logger.info(f"Successfully synced {new_count} real corporate announcements to database.")
-                    return new_count
-                except Exception as e:
-                    db.rollback()
-                    logger.warning(f"Error inserting news catalysts to DB: {e}")
-                finally:
-                    db.close()
+                resp = await client.get(nse_url)
+                if resp.status_code == 200:
+                    raw_items = resp.json()
+                    if isinstance(raw_items, list) and len(raw_items) > 0:
+                        items = raw_items
+                        logger.info(f"NSE Announcements API returned {len(items)} items successfully.")
+                else:
+                    logger.warning(f"NSE Announcements API status {resp.status_code}. Trying secondary feed...")
         except Exception as e:
-            logger.warning(f"Could not reach NSE Corporate Announcements endpoint: {e}")
+            logger.warning(f"Could not reach NSE Corporate Announcements endpoint ({e}). Attempting secondary BSE stream...")
 
-        return 0
+        # 2. Secondary Fallback: BSE Corporate Announcements Feed if NSE was blocked
+        if not items:
+            try:
+                bse_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://www.bseindia.com/",
+                    "Accept": "application/json, text/plain, */*"
+                }
+                async with httpx.AsyncClient(headers=bse_headers, timeout=10.0) as client:
+                    resp = await client.get(bse_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        table_items = data.get("Table") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                        if table_items:
+                            for it in table_items:
+                                sym = it.get("SCRIP_CD") or it.get("SLONGNAME") or ""
+                                head = it.get("NEWSSUB") or it.get("HEADLINE") or it.get("MORE") or ""
+                                items.append({
+                                    "symbol": sym,
+                                    "desc": head,
+                                    "an_dt": it.get("NEWS_DT", "")
+                                })
+                            source_label = "BSE Corporate Disclosures"
+                            logger.info(f"BSE Announcements stream retrieved {len(items)} announcements successfully.")
+            except Exception as bse_err:
+                logger.warning(f"BSE secondary announcements stream error: {bse_err}")
+
+        # 3. Save unique items to SQLite Database
+        if not items:
+            logger.info("Corporate announcements sync check: 0 new announcements at this interval.")
+            return 0
+
+        db = SessionLocal()
+        new_count = 0
+        try:
+            for item in items[:120]:
+                symbol = item.get("symbol", "").upper().strip()
+                desc = item.get("desc", "").strip()
+                att = item.get("an_dt", "")
+                if not symbol or not desc:
+                    continue
+
+                event_type, direction, materiality, time_horizon = cls.classify_headline(desc)
+                
+                # Parse published date
+                pub_dt = datetime.utcnow()
+                try:
+                    pub_dt = datetime.strptime(att, "%d-%b-%Y %H:%M:%S")
+                except Exception:
+                    pass
+
+                # Check if already in DB
+                existing = db.query(DBNewsCatalyst).filter(
+                    DBNewsCatalyst.symbol == symbol,
+                    DBNewsCatalyst.headline == desc
+                ).first()
+
+                if not existing:
+                    cat = DBNewsCatalyst(
+                        symbol=symbol,
+                        event_type=event_type,
+                        direction=direction,
+                        materiality=materiality,
+                        time_horizon=time_horizon,
+                        headline=desc,
+                        source=source_label,
+                        published_at=pub_dt,
+                        days_away=None,
+                        raw_details=item.get("attchmntText", "")
+                    )
+                    db.add(cat)
+                    new_count += 1
+
+            db.commit()
+            logger.info(f"News Sync Complete: Successfully saved {new_count} real corporate announcements ({source_label}) to DB.")
+            return new_count
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Error persisting news catalysts to DB: {e}")
+            return 0
+        finally:
+            db.close()
 
     @classmethod
     def get_events_for_symbol(cls, symbol: str) -> List[StructuredCatalyst]:

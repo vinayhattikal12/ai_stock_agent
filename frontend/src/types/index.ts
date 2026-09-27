@@ -345,18 +345,38 @@ export interface PositionSizingSuggestion {
   expected_value_inr?: number;
 }
 
-export interface StructuredCatalyst {
-  symbol: string;
-  event_type: string;
-  direction: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
-  materiality: 'HIGH' | 'MEDIUM' | 'LOW';
-  time_horizon: 'SHORT' | 'MEDIUM' | 'LONG';
-  recency?: string;
-  confidence?: number;
-  headline: string;
-  source: string;
-  published_at: string;
-  days_away?: number;
+export interface FundamentalSnapshot {
+  pe_ratio?: number;
+  pb_ratio?: number;
+  roe?: number;
+  roe_pct?: number;
+  roce_pct?: number;
+  debt_to_equity?: number;
+  market_cap_cr?: number;
+  quarterly_revenue_growth_yoy?: number;
+  quarterly_profit_growth_yoy?: number;
+  yoy_eps_growth_pct?: number;
+  eps_trailing_12m?: number;
+  is_profitable?: boolean;
+  is_profitable_latest_quarter?: boolean;
+  net_profit_margin_pct?: number;
+  is_fundamentally_disqualified?: boolean;
+  disqualification_reason?: string;
+  data_source?: string;
+  status?: string;
+}
+
+export interface StreetTargetCheck {
+  has_street_coverage?: boolean;
+  highest_analyst_target?: number;
+  median_analyst_target?: number;
+  street_target_median?: number;
+  street_target_high?: number;
+  target1_vs_street_high_pct?: number;
+  target1_vs_street_median_pct?: number;
+  exceeds_street_high?: boolean;
+  warning_note?: string;
+  warning_message?: string;
 }
 
 export interface StockOpportunity {
@@ -385,6 +405,10 @@ export interface StockOpportunity {
   position_sizing?: PositionSizingSuggestion;
   risk_metrics?: RiskManagementMetrics;
   volume_quality?: InstitutionalVolumeQuality;
+  fundamental_snapshot?: FundamentalSnapshot;
+  street_target_check?: StreetTargetCheck;
+  is_extended_entry?: boolean;
+  extension_pct_ema20?: number;
   composite_rank_score?: number;
   ranking_version: string;
   invalidation_condition?: string;
@@ -528,7 +552,10 @@ export interface StockFullAnalysisResponse {
   catalysts: StructuredCatalyst[];
   catalyst_score?: number;
   relative_strength: RelativeStrengthMetrics;
-  fundamental_snapshot: Record<string, any>;
+  fundamental_snapshot?: FundamentalSnapshot;
+  street_target_check?: StreetTargetCheck;
+  is_extended_entry?: boolean;
+  extension_pct_ema20?: number;
   invalidation_condition?: string;
   snapshot?: MarketDataSnapshot;
   data_quality: DataQualityReport;

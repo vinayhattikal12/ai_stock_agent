@@ -220,4 +220,25 @@ class TargetStopEngine:
         )
 
 
+    @classmethod
+    def calculate_chandelier_trailing_stop(
+        cls,
+        candles: List[Candle],
+        atr: float,
+        multiplier: float = 2.0,
+        lookback: int = 15
+    ) -> Optional[float]:
+        """
+        Computes dynamic Chandelier trailing exit: Highest High(lookback) - (multiplier * ATR).
+        Used to trail stops dynamically as position expands into Target 1 and beyond.
+        """
+        if not candles or len(candles) < 5 or atr <= 0:
+            return None
+        
+        recent = candles[-min(lookback, len(candles)):]
+        highest_high = max(c.high for c in recent)
+        trailing_stop = highest_high - (multiplier * atr)
+        return round(trailing_stop, 2)
+
+
 target_stop_engine = TargetStopEngine()

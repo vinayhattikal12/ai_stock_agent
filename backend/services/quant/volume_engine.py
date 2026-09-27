@@ -4,7 +4,7 @@ from backend.models.schemas import Candle, VolumeProfileMetrics
 class VolumeEngine:
     """
     Analyzes volume behavior, Relative Volume (RVOL), institutional accumulation/distribution,
-    and volume dry-up during consolidations.
+    pocket pivot signatures, delivery volume estimations, and volume climax/exhaustion conditions.
     """
     
     @staticmethod
@@ -16,7 +16,11 @@ class VolumeEngine:
                 breakout_volume_surge=1.0,
                 volume_trend="NEUTRAL",
                 avg_turnover_cr_20d=10.0,
-                is_volume_confirmed=False
+                is_volume_confirmed=False,
+                is_volume_climax=False,
+                institutional_accumulation_score=50.0,
+                delivery_est_ratio=0.45,
+                exhaustion_risk="LOW"
             )
             
         n_20 = min(len(candles), 20)
@@ -47,13 +51,32 @@ class VolumeEngine:
         n_10 = min(len(candles), 10)
         up_volume = 0.0
         down_volume = 0.0
+        up_days = 0
+        down_days = 0
+        
         for i in range(-n_10, 0):
             c = candles[i]
             if c.close >= c.open:
                 up_volume += float(c.volume)
+                up_days += 1
             else:
                 down_volume += float(c.volume)
+                down_days += 1
                 
+        # Institutional Accumulation Score (0 to 100)
+        # Factors: Up/Down Volume ratio, closing location in daily range, volume surge on up-bars
+        vol_ratio = (up_volume / (down_volume or 1.0))
+        daily_range = current_candle.high - current_candle.low
+        close_location = (current_candle.close - current_candle.low) / daily_range if daily_range > 0 else 0.5
+        
+        raw_acc_score = 50.0 + (min(vol_ratio, 3.0) - 1.0) * 20.0 + (close_location - 0.5) * 30.0
+        if rvol_20d >= 1.5 and current_candle.close >= current_candle.open:
+            raw_acc_score += 15.0
+        inst_acc_score = round(min(max(raw_acc_score, 10.0), 98.0), 1)
+
+        # Estimated Delivery Participation (higher close near high + higher turnover correlates with institutional delivery)
+        delivery_est = round(min(max(0.35 + (close_location * 0.25) + (0.10 if rvol_20d > 1.2 else 0.0), 0.20), 0.85), 2)
+
         # Classify volume trend
         if rvol_20d < 0.65 and vol_5d_vs_20d < 0.85:
             volume_trend = "CONTRACTION"
@@ -63,12 +86,32 @@ class VolumeEngine:
             volume_trend = "DISTRIBUTION"
         else:
             volume_trend = "NEUTRAL"
-            
+
+        # Volume Climax / Exhaustion Risk:
+        # Extreme volume spike (> 2.8x RVOL) with either long upper shadow (selling into strength) or extreme gap-up
+        upper_shadow = current_candle.high - max(current_candle.open, current_candle.close)
+        body_size = abs(current_candle.close - current_candle.open)
+        
+        is_climax = False
+        exhaustion_risk = "LOW"
+        
+        if rvol_20d >= 2.8:
+            if upper_shadow > body_size * 1.2:
+                is_climax = True
+                exhaustion_risk = "EXTREME"
+            elif rvol_20d >= 3.5:
+                is_climax = True
+                exhaustion_risk = "HIGH"
+            else:
+                exhaustion_risk = "MODERATE"
+        elif rvol_20d >= 2.0 and down_volume > (up_volume * 1.5):
+            exhaustion_risk = "MODERATE"
+
         # Breakout volume surge
         breakout_surge = rvol_20d if current_candle.close >= current_candle.open else round(rvol_20d * 0.5, 2)
         
         # Volume confirmed trigger
-        is_confirmed = (rvol_20d >= 1.30 and current_candle.close >= current_candle.open) or (
+        is_confirmed = (rvol_20d >= 1.30 and current_candle.close >= current_candle.open and not is_climax) or (
             volume_trend == "ACCUMULATION" and rvol_20d >= 1.0
         )
         
@@ -78,7 +121,11 @@ class VolumeEngine:
             breakout_volume_surge=breakout_surge,
             volume_trend=volume_trend,
             avg_turnover_cr_20d=avg_turnover_cr,
-            is_volume_confirmed=is_confirmed
+            is_volume_confirmed=is_confirmed,
+            is_volume_climax=is_climax,
+            institutional_accumulation_score=inst_acc_score,
+            delivery_est_ratio=delivery_est,
+            exhaustion_risk=exhaustion_risk
         )
 
 volume_engine = VolumeEngine()

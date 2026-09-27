@@ -73,5 +73,27 @@ class TestQuantEngines(unittest.TestCase):
         self.assertGreaterEqual(levels.risk_reward_ratio, 1.0)
         self.assertTrue(len(levels.levels_reasoning) >= 3)
 
+    def test_fundamental_disqualification_gate(self):
+        from backend.services.market_data.fundamental_service import fundamental_service
+        # Loss-making stock must be disqualified
+        is_disq, reason = fundamental_service.evaluate_fundamental_disqualifier("PAYTM")
+        self.assertTrue(is_disq)
+        self.assertIn("net loss", reason.lower())
+
+        # High growth profitable stock must NOT be disqualified
+        is_disq_rel, _ = fundamental_service.evaluate_fundamental_disqualifier("RELIANCE")
+        self.assertFalse(is_disq_rel)
+
+    def test_street_analyst_target_cross_check(self):
+        from backend.services.market_data.fundamental_service import fundamental_service
+        # Target higher than street high target (e.g. Reliance street high is 3350)
+        check = fundamental_service.check_street_analyst_consensus("RELIANCE", 3600.0)
+        self.assertTrue(check["exceeds_street_high"])
+        self.assertIsNotNone(check["warning_message"])
+
+        # Realistic target within Street consensus
+        check_valid = fundamental_service.check_street_analyst_consensus("RELIANCE", 3200.0)
+        self.assertFalse(check_valid["exceeds_street_high"])
+
 if __name__ == "__main__":
     unittest.main()

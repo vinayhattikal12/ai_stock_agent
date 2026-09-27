@@ -99,10 +99,21 @@ async def on_startup():
     from backend.services.market_data.universe_manager import AMFIUniverseManager
     asyncio.create_task(AMFIUniverseManager.sync_amfi_universe())
     
-    # Background live corporate announcements sync
+    # Background recurring live corporate announcements sync (every 10 minutes)
     from backend.services.news.event_tracker import news_engine
-    asyncio.create_task(news_engine.fetch_and_sync_live_announcements())
-    
+    async def periodic_news_sync_runner():
+        while True:
+            try:
+                synced = await news_engine.fetch_and_sync_live_announcements()
+                if synced > 0:
+                    logger.info(f"Corporate News Engine: Synced {synced} new corporate announcements.")
+                await asyncio.sleep(600) # Check every 10 minutes
+            except Exception as e:
+                logger.warning(f"Error in background news announcement sync: {e}")
+                await asyncio.sleep(600)
+
+    asyncio.create_task(periodic_news_sync_runner())
+
     # Background periodic signal audit evaluator
     from backend.services.scheduler.automation import scheduler_service
     async def periodic_audit_runner():
@@ -117,6 +128,38 @@ async def on_startup():
                 await asyncio.sleep(600)
     
     asyncio.create_task(periodic_audit_runner())
+
+    # Background automated ML model fitting and walk-forward backtest compilation if missing
+    from backend.services.ml.trainer import ml_trainer, MODEL_BUNDLE_PATH
+    from backend.services.ml.historical_engine import historical_backtest_engine
+    from backend.models.database import DBHistoricalBacktest
+
+    async def init_ml_model_and_backtest():
+        try:
+            # 1. Fit ML model if bundle missing
+            if not os.path.exists(MODEL_BUNDLE_PATH):
+                logger.info("Fitted ML model bundle missing. Training calibrated Gradient Boosting model in background...")
+                train_res = await ml_trainer.train_and_persist_models(lookback_days=1000)
+                logger.info(f"ML Model Training completed with status: {train_res.get('status')}")
+
+            # 2. Run historical walk-forward backtest if table empty
+            db = SessionLocal()
+            try:
+                has_bt = db.query(DBHistoricalBacktest).first() is not None
+            finally:
+                db.close()
+
+            if not has_bt:
+                logger.info("Compiling initial historical walk-forward backtest dataset...")
+                samples = await historical_backtest_engine.build_labeled_dataset(lookback_days=1000)
+                if samples:
+                    bt_res = historical_backtest_engine.run_purged_walk_forward_validation(samples)
+                    logger.info(f"Historical Walk-Forward Backtest completed: {bt_res.get('status')}")
+        except Exception as ml_init_err:
+            logger.warning(f"Note: ML background initialization deferred: {ml_init_err}")
+
+    asyncio.create_task(init_ml_model_and_backtest())
+
     logger.info("AI Equity Intelligence Platform backend initialized successfully.")
 
 @app.get("/health")

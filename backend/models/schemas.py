@@ -221,7 +221,30 @@ class VolumeProfileMetrics(BaseModel):
     volume_trend: str = "NEUTRAL"  # ACCUMULATION, DISTRIBUTION, NEUTRAL, CONTRACTION
     avg_turnover_cr_20d: Optional[float] = None
     is_volume_confirmed: bool = False
+    is_volume_climax: bool = False
+    institutional_accumulation_score: Optional[float] = None  # 0 to 100
+    delivery_est_ratio: Optional[float] = None
+    exhaustion_risk: str = "LOW"  # LOW, MODERATE, HIGH, EXTREME
     status: str = "AVAILABLE"
+
+class FundamentalSnapshot(BaseModel):
+    pe_ratio: Optional[float] = None
+    pb_ratio: Optional[float] = None
+    debt_to_equity: Optional[float] = None
+    roce_pct: Optional[float] = None
+    roe_pct: Optional[float] = None
+    market_cap_cr: Optional[float] = None
+    is_profitable_latest_quarter: bool = True
+    yoy_eps_growth_pct: Optional[float] = 10.0
+    is_fundamentally_disqualified: bool = False
+    disqualification_reason: Optional[str] = None
+    status: str = "AVAILABLE"
+
+class StreetTargetCheck(BaseModel):
+    highest_analyst_target: Optional[float] = None
+    median_analyst_target: Optional[float] = None
+    exceeds_street_high: bool = False
+    warning_message: Optional[str] = None
 
 # --- ML & Opportunity Models ---
 class MLProbabilityMetrics(BaseModel):
@@ -391,6 +414,9 @@ class StockOpportunity(BaseModel):
     watch_reasons: List[str] = []
     failure_reasons: List[str] = []
     risks: List[str] = []
+    is_extended_entry: bool = False
+    extension_pct_ema20: Optional[float] = None
+    street_target_check: Optional[StreetTargetCheck] = None
     scan_streak_days: int = 1
     is_multi_day_runner: bool = False
     streak_description: Optional[str] = None
@@ -537,6 +563,9 @@ class StockFullAnalysisResponse(BaseModel):
     catalyst_score: Optional[float] = None
     relative_strength: RelativeStrengthMetrics
     fundamental_snapshot: Dict[str, Any] = {}
+    street_target_check: Optional[StreetTargetCheck] = None
+    is_extended_entry: bool = False
+    extension_pct_ema20: Optional[float] = None
     invalidation_condition: Optional[str] = None
     snapshot: Optional[MarketDataSnapshot] = None
     data_quality: DataQualityReport

@@ -383,13 +383,14 @@ class SystematicStockScanner:
 
             # Volume Quality
             rvol_val = vol_metrics.rvol_20d or 1.0
-            acc_dist_score = min(100.0, max(0.0, 50.0 + (rvol_val - 1.0) * 25.0 + (5.0 if vol_metrics.volume_trend == "ACCUMULATION" else -5.0)))
+            acc_dist_score = vol_metrics.institutional_accumulation_score or 50.0
+            deliv_pct = round((vol_metrics.delivery_est_ratio or 0.45) * 100.0, 1)
             vol_quality = InstitutionalVolumeQuality(
-                delivery_volume_pct_estimate=round(45.0 + min(25.0, max(-15.0, (rvol_val - 1.0) * 15.0)), 1),
-                accumulation_distribution_score=round(acc_dist_score, 1),
-                is_institutional_accumulation=(rvol_val >= 1.3 and vol_metrics.volume_trend == "ACCUMULATION"),
+                delivery_volume_pct_estimate=deliv_pct,
+                accumulation_distribution_score=acc_dist_score,
+                is_institutional_accumulation=(rvol_val >= 1.25 and (vol_metrics.volume_trend == "ACCUMULATION" or acc_dist_score >= 60.0)),
                 volume_dry_up_on_pullback=(rvol_val < 0.8 and current_price < (indicators.ema_20 or current_price)),
-                pocket_pivot_volume_surge=(rvol_val >= 1.5 and daily_chg > 1.0),
+                pocket_pivot_volume_surge=(rvol_val >= 1.4 and daily_chg > 0.8),
                 event_risk_warning="Quarterly Corporate Earnings Window: Monitor company announcements." if has_earnings_risk else None,
                 status="AVAILABLE"
             )
@@ -462,6 +463,7 @@ class SystematicStockScanner:
                 "scan_streak_days": current_streak,
                 "is_multi_day_runner": is_runner,
                 "streak_description": streak_desc,
+                "indicators": indicators,
                 "data_quality": dq_summary,
                 "timestamp": candles[-1].timestamp if candles else scan_time
             })
@@ -504,6 +506,50 @@ class SystematicStockScanner:
 
                 watch_reasons: List[str] = []
                 failure_reasons: List[str] = []
+
+                # Priority 2.1: Hard Fundamental Disqualification Gate
+                from backend.services.market_data.fundamental_service import fundamental_service
+                is_fund_disqualified, fund_disqual_reason = fundamental_service.evaluate_fundamental_disqualifier(symbol)
+                if is_fund_disqualified:
+                    category_rejections[cat_key]["fundamental_disqualification"] = category_rejections[cat_key].get("fundamental_disqualification", 0) + 1
+                    global_rejections["fundamental_disqualification"] = global_rejections.get("fundamental_disqualification", 0) + 1
+                    watch_reasons.append(fund_disqual_reason or "Fundamental health veto")
+                    failure_reasons.append("Fundamental health veto: Net loss or severe EPS contraction.")
+
+                # Priority 2.2: Relative-Strength Deterioration Veto
+                rs_metrics_obj: RelativeStrengthMetrics = item["relative_strength"]
+                is_rs_deteriorating = (rs_metrics_obj.rs_trend == "DETERIORATING" and (rs_metrics_obj.excess_return_5d or 0.0) < 0.0)
+                if is_rs_deteriorating:
+                    category_rejections[cat_key]["rs_deterioration_veto"] = category_rejections[cat_key].get("rs_deterioration_veto", 0) + 1
+                    global_rejections["rs_deterioration_veto"] = global_rejections.get("rs_deterioration_veto", 0) + 1
+                    watch_reasons.append(f"Mansfield RS trend is DETERIORATING with negative 5-day excess return ({rs_metrics_obj.excess_return_5d:.1f}%). Relative strength momentum veto applied.")
+                    failure_reasons.append("RS trend deteriorating vs benchmark.")
+                    composite_score = min(58.0, composite_score)
+
+                # Priority 2.3: Overbought / Extended Entry Gate
+                indicators_obj = item.get("indicators")
+                dist_ema20 = 0.0
+                if indicators_obj and indicators_obj.ema_20 and indicators_obj.ema_20 > 0:
+                    dist_ema20 = round((current_price - indicators_obj.ema_20) / indicators_obj.ema_20 * 100.0, 1)
+                rsi_val = indicators_obj.rsi_14 if indicators_obj and indicators_obj.rsi_14 is not None else 50.0
+                is_extended = (dist_ema20 > 25.0 and rsi_val > 70.0)
+                if is_extended:
+                    watch_reasons.append(f"EXTENDED_ENTRY: Price is +{dist_ema20:.1f}% above 20-EMA with RSI {rsi_val:.1f} > 70. Elevated pullback risk.")
+                    failure_reasons.append("Overextended above 20-EMA with overbought RSI.")
+                    composite_score = min(60.0, composite_score - 15.0)
+
+                # Priority 2.4: Anticipatory VCP Trigger Gate
+                if setup_type == "VOLATILITY_CONTRACTION":
+                    trig_price = levels.reference_entry or levels.entry_high or current_price
+                    rvol_vcp = vol_metrics.rvol_20d or 1.0
+                    if current_price < (trig_price * 0.995) or rvol_vcp < 1.15:
+                        watch_reasons.append(f"ANTICIPATORY_VCP: Awaiting confirmed breakout above trigger price (₹{trig_price:,.2f}) on RVOL >= 1.15x (Current: {rvol_vcp:.2f}x).")
+                        failure_reasons.append("Awaiting VCP breakout trigger condition.")
+
+                # Priority 2.5: Street Analyst Consensus Cross-Check
+                street_check_dict = fundamental_service.check_street_analyst_consensus(symbol, levels.target_1)
+                from backend.models.schemas import StreetTargetCheck
+                street_target_check_obj = StreetTargetCheck(**street_check_dict)
 
                 # 1. Check ML probability threshold
                 if ml_metrics.p_t1_before_sl is None or ml_metrics.p_t1_before_sl < policy.min_probability_threshold:
@@ -575,6 +621,12 @@ class SystematicStockScanner:
                     f"Regime Scale: {int(policy.position_size_multiplier * 100)}% of standard risk allocation",
                     f"Portfolio Fit Score: {item['portfolio_fit_score']:.0f}/100"
                 ]
+                if is_extended:
+                    risks.append(f"Overextended entry: +{dist_ema20:.1f}% above 20-EMA (Elevated pullback risk).")
+                if is_fund_disqualified:
+                    risks.append("Reported quarterly net loss or earnings contraction.")
+                if street_target_check_obj.exceeds_street_high and street_target_check_obj.warning_message:
+                    risks.append(street_target_check_obj.warning_message)
 
                 invalidation = f"Daily candle close below ₹{levels.stop_loss:.2f} or Mansfield RS crossing below zero on heavy volume." if levels.stop_loss else None
 
@@ -611,6 +663,9 @@ class SystematicStockScanner:
                     watch_reasons=watch_reasons,
                     failure_reasons=failure_reasons,
                     risks=risks,
+                    is_extended_entry=is_extended,
+                    extension_pct_ema20=dist_ema20,
+                    street_target_check=street_target_check_obj,
                     scan_streak_days=item.get("scan_streak_days", 1),
                     is_multi_day_runner=item.get("is_multi_day_runner", False),
                     streak_description=item.get("streak_description"),

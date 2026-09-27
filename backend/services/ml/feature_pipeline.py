@@ -1,10 +1,31 @@
 from typing import List, Dict, Any, Optional
 from backend.models.schemas import Candle, TechnicalIndicators
 
+FEATURE_NAMES = [
+    "dist_ema20",
+    "dist_ema50",
+    "dist_ema200",
+    "ema_alignment",
+    "rsi_norm",
+    "macd_hist_ratio",
+    "adx_strength",
+    "atr_pct",
+    "bb_width",
+    "volume_surge",
+    "delivery_ratio",
+    "institutional_acc_score",
+    "breakout_proximity",
+    "rs_20d",
+    "mansfield_rs",
+    "sector_momentum",
+    "candle_score_norm",
+    "regime_val"
+]
+
 class FeaturePipeline:
     """
     Transforms raw OHLCV series, technical indicators, relative strength,
-    volume profile, and market context into calibrated feature vectors for ML models.
+    volume profile, institutional delivery ratios, and market context into calibrated feature vectors for ML models.
     Returns empty dict if required features cannot be computed.
     """
     
@@ -18,6 +39,8 @@ class FeaturePipeline:
         sector_momentum: Optional[float] = None,
         candle_score: Optional[float] = None,
         rvol: Optional[float] = None,
+        delivery_ratio: Optional[float] = None,
+        institutional_acc_score: Optional[float] = None,
         market_regime: str = "BULL"
     ) -> Dict[str, float]:
         if not candles or len(candles) < 20:
@@ -68,7 +91,19 @@ class FeaturePipeline:
         highest_20 = max([c.high for c in candles[-min(20, len(candles)):]])
         breakout_proximity = (current - highest_20) / highest_20 * 100.0 if highest_20 > 0 else 0.0
         
-        # 5. Market Regime Encoding
+        # 5. Volume & Institutional Delivery Features
+        if delivery_ratio is None or institutional_acc_score is None:
+            from backend.services.quant.volume_engine import volume_engine
+            vol_metrics = volume_engine.calculate_volume_metrics(candles)
+            if delivery_ratio is None:
+                delivery_ratio = vol_metrics.delivery_est_ratio
+            if institutional_acc_score is None:
+                institutional_acc_score = vol_metrics.institutional_accumulation_score
+
+        deliv_val = float(delivery_ratio if delivery_ratio is not None else 0.45)
+        inst_acc_norm = ((float(institutional_acc_score if institutional_acc_score is not None else 50.0)) - 50.0) / 50.0
+
+        # 6. Market Regime Encoding
         regime_weights = {
             "STRONG_BULL": 1.0,
             "BULL": 0.8,
@@ -90,6 +125,8 @@ class FeaturePipeline:
             "atr_pct": round(atr_pct, 3),
             "bb_width": round(bb_width, 3),
             "volume_surge": round(rvol if rvol is not None else 1.0, 3),
+            "delivery_ratio": round(deliv_val, 3),
+            "institutional_acc_score": round(inst_acc_norm, 3),
             "breakout_proximity": round(breakout_proximity, 3),
             "rs_20d": round(rs_20d if rs_20d is not None else 0.0, 3),
             "mansfield_rs": round(mansfield_rs if mansfield_rs is not None else 0.0, 3),

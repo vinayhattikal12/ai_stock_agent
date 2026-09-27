@@ -9,24 +9,7 @@ from backend.services.ml.historical_engine import historical_backtest_engine, Hi
 
 logger = logging.getLogger("ml_trainer")
 
-FEATURE_NAMES = [
-    "dist_ema20",
-    "dist_ema50",
-    "dist_ema200",
-    "ema_alignment",
-    "rsi_norm",
-    "macd_hist_ratio",
-    "adx_strength",
-    "atr_pct",
-    "bb_width",
-    "volume_surge",
-    "breakout_proximity",
-    "rs_20d",
-    "mansfield_rs",
-    "sector_momentum",
-    "candle_score_norm",
-    "regime_val"
-]
+from backend.services.ml.feature_pipeline import FEATURE_NAMES
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -143,10 +126,20 @@ class MLModelTrainer:
         calibrated_t3 = CalibratedClassifierCV(estimator=base_t3, method="sigmoid", cv=3)
         calibrated_t3.fit(X, y_t3)
 
-        # 4. Out-of-sample / In-sample validation metrics
-        probs_t1 = calibrated_t1.predict_proba(X)[:, 1]
-        brier_t1 = float(round(brier_score_loss(y_t1, probs_t1), 3))
-        auc_t1 = float(round(roc_auc_score(y_t1, probs_t1), 3)) if len(np.unique(y_t1)) > 1 else None
+        # 4. Out-of-sample vs In-sample validation metrics (Fixes in-sample evaluation bug)
+        from sklearn.model_selection import cross_val_predict
+        try:
+            oos_probs_t1 = cross_val_predict(calibrated_t1, X, y_t1, cv=min(3, max(2, n_samples // 20)), method="predict_proba")[:, 1]
+            oos_brier_t1 = float(round(brier_score_loss(y_t1, oos_probs_t1), 3))
+            oos_auc_t1 = float(round(roc_auc_score(y_t1, oos_probs_t1), 3)) if len(np.unique(y_t1)) > 1 else None
+        except Exception as oos_err:
+            logger.warning(f"Could not compute cross-validation OOS predictions: {oos_err}")
+            oos_brier_t1 = None
+            oos_auc_t1 = None
+
+        in_sample_probs = calibrated_t1.predict_proba(X)[:, 1]
+        in_sample_brier = float(round(brier_score_loss(y_t1, in_sample_probs), 3))
+        in_sample_auc = float(round(roc_auc_score(y_t1, in_sample_probs), 3)) if len(np.unique(y_t1)) > 1 else None
 
         # 5. Extract Real Feature Importances from Base Model
         importances = base_t1.feature_importances_
@@ -165,8 +158,12 @@ class MLModelTrainer:
             "calibrated_t1": calibrated_t1,
             "calibrated_t2": calibrated_t2,
             "calibrated_t3": calibrated_t3,
-            "brier_score_t1": brier_t1,
-            "roc_auc_t1": auc_t1,
+            "brier_score_t1": oos_brier_t1 or in_sample_brier,
+            "roc_auc_t1": oos_auc_t1 or in_sample_auc,
+            "out_of_sample_brier": oos_brier_t1,
+            "out_of_sample_auc": oos_auc_t1,
+            "in_sample_brier": in_sample_brier,
+            "in_sample_auc": in_sample_auc,
             "feature_importances": feature_importance_list,
             "t1_base_rate": round(t1_positives / n_samples, 3),
             "t2_base_rate": round(t2_positives / n_samples, 3),
@@ -174,7 +171,7 @@ class MLModelTrainer:
         }
 
         joblib.dump(model_bundle, MODEL_BUNDLE_PATH)
-        logger.info(f"Fitted ML model bundle successfully saved to {MODEL_BUNDLE_PATH}")
+        logger.info(f"Fitted ML model bundle successfully saved to {MODEL_BUNDLE_PATH} (OOS Brier: {oos_brier_t1}, OOS AUC: {oos_auc_t1})")
 
         # Reload model in classifier
         from backend.services.ml.classifier import ml_classifier
@@ -185,8 +182,16 @@ class MLModelTrainer:
             "model_version": cls.MODEL_VERSION,
             "training_timestamp": datetime.utcnow().isoformat(),
             "total_samples": n_samples,
-            "brier_score": brier_t1,
-            "roc_auc": auc_t1,
+            "brier_score": oos_brier_t1 or in_sample_brier,
+            "roc_auc": oos_auc_t1 or in_sample_auc,
+            "out_of_sample_metrics": {
+                "brier_score": oos_brier_t1,
+                "roc_auc": oos_auc_t1
+            },
+            "in_sample_diagnostics": {
+                "brier_score": in_sample_brier,
+                "roc_auc": in_sample_auc
+            },
             "feature_importances": feature_importance_list,
             "base_rates": {
                 "t1_hit_rate": round(t1_positives / n_samples, 3),

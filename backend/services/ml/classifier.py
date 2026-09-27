@@ -8,24 +8,7 @@ from backend.models.schemas import MLProbabilityMetrics
 
 logger = logging.getLogger("ml_classifier")
 
-FEATURE_NAMES = [
-    "dist_ema20",
-    "dist_ema50",
-    "dist_ema200",
-    "ema_alignment",
-    "rsi_norm",
-    "macd_hist_ratio",
-    "adx_strength",
-    "atr_pct",
-    "bb_width",
-    "volume_surge",
-    "breakout_proximity",
-    "rs_20d",
-    "mansfield_rs",
-    "sector_momentum",
-    "candle_score_norm",
-    "regime_val"
-]
+from backend.services.ml.feature_pipeline import FEATURE_NAMES
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
 MODEL_BUNDLE_PATH = os.path.join(MODEL_DIR, "swing_model_bundle.joblib")
@@ -111,7 +94,10 @@ class FittedMLClassifier:
                     expected_days_min=exp_min,
                     expected_days_max=exp_max,
                     prediction_horizon_days=10,
+                    horizon_label="10 trading days",
+                    prediction_label="P(T1 before SL within 10 trading days)",
                     model_version=self.model_bundle.get("model_version", "Fitted-GradientBoosted-v1.0"),
+                    calibration_method="Isotonic Out-of-Fold Calibration (Walk-Forward Verified)",
                     training_period="Multi-Year Empirical Walk-Forward Dataset",
                     validation_period="Out-of-Sample Triple-Barrier Fold",
                     calibration_status="CALIBRATED_ISOTONIC",
@@ -168,13 +154,16 @@ class FittedMLClassifier:
             expected_days_min=exp_min,
             expected_days_max=exp_max,
             prediction_horizon_days=10,
+            horizon_label="10 trading days",
+            prediction_label="Heuristic Setup Score (Not Statistically Calibrated)",
             model_version="Heuristic-Rule-Based-v1.0",
+            calibration_method="Heuristic Rule-Based (Uncalibrated)",
             training_period=None,
             validation_period=None,
             calibration_status="UNAVAILABLE",
             brier_score_calibration=None,
             status="HEURISTIC_RULE_BASED",
-            reason=None
+            reason="Model bundle not yet persisted. Run /api/audit/model/train to generate fitted bundle."
         )
 
 

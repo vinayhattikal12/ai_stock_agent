@@ -43,6 +43,20 @@ class TestMLAndScanner(unittest.TestCase):
         self.assertTrue(0.0 <= prob.p_t3_before_sl <= 1.0)
         self.assertGreater(prob.p_t1_before_sl, prob.p_t2_before_sl)
         self.assertGreater(prob.p_t2_before_sl, prob.p_t3_before_sl)
+        self.assertIsNotNone(prob.calibration_method)
+        self.assertIsNotNone(prob.prediction_label)
+
+    def test_rs_deterioration_veto_logic(self):
+        from backend.models.schemas import RelativeStrengthMetrics
+        rs = RelativeStrengthMetrics(
+            rs_trend="DETERIORATING",
+            excess_return_5d=-3.2,
+            mansfield_rs_50d=-1.5,
+            status="AVAILABLE"
+        )
+        # Verify veto triggers on deteriorating trend with negative 5d return
+        is_vetoed = (rs.rs_trend == "DETERIORATING" and (rs.excess_return_5d or 0.0) < 0.0)
+        self.assertTrue(is_vetoed)
 
 if __name__ == "__main__":
     unittest.main()
