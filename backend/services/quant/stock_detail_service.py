@@ -221,13 +221,14 @@ class StockDetailService:
 
         # Institutional Volume Quality
         rvol = vol_metrics.rvol_20d or 1.0
-        acc_dist_score = min(100.0, max(0.0, 50.0 + (rvol - 1.0) * 25.0 + (5.0 if vol_metrics.volume_trend == "ACCUMULATION" else -5.0)))
+        acc_dist_score = vol_metrics.institutional_accumulation_score or 50.0
+        deliv_pct = round((vol_metrics.delivery_est_ratio or 0.45) * 100.0, 1)
         vol_quality = InstitutionalVolumeQuality(
-            delivery_volume_pct_estimate=round(45.0 + min(25.0, max(-15.0, (rvol - 1.0) * 15.0)), 1),
-            accumulation_distribution_score=round(acc_dist_score, 1),
-            is_institutional_accumulation=(rvol >= 1.3 and vol_metrics.volume_trend == "ACCUMULATION"),
+            delivery_volume_pct_estimate=deliv_pct,
+            accumulation_distribution_score=acc_dist_score,
+            is_institutional_accumulation=(rvol >= 1.25 and (vol_metrics.volume_trend == "ACCUMULATION" or acc_dist_score >= 60.0)),
             volume_dry_up_on_pullback=(rvol < 0.8 and current_price < (indicators.ema_20 or current_price)),
-            pocket_pivot_volume_surge=(rvol >= 1.5 and daily_change_pct > 1.0),
+            pocket_pivot_volume_surge=(rvol >= 1.4 and daily_change_pct > 0.8),
             event_risk_warning="Quarterly Corporate Earnings Window: Monitor company announcements." if (catalysts and any("Earning" in c.headline for c in catalysts)) else None,
             status="AVAILABLE"
         )
@@ -243,6 +244,12 @@ class StockDetailService:
             why_setup.append(f"Candlestick Trigger: {patterns[0].name} ({patterns[0].description})")
 
         risks = [
+            f"Protective Stop Loss: ₹{levels.stop_loss:,.2f} ({levels.stop_reason})" if levels.stop_loss else "Stop Loss: Structural stop",
+            f"Overhead Target 1: ₹{levels.target_1:,.2f} ({levels.risk_reward_ratio_t1:.1f}R Payoff)" if levels.target_1 and levels.risk_reward_ratio_t1 else "Target 1: Awaiting structure"
+        ]
+        if levels.target_3_reason:
+            risks.append(f"Target 3 Note: {levels.target_3_reason}")
+
         # Fundamental Snapshot & Street Consensus Cross-Check
         from backend.services.market_data.fundamental_service import fundamental_service
         from backend.models.schemas import StreetTargetCheck
