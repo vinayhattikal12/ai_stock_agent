@@ -379,6 +379,20 @@ export interface StreetTargetCheck {
   warning_message?: string;
 }
 
+export interface StructuredCatalyst {
+  symbol: string;
+  event_type: string;
+  direction: string;
+  materiality: string;
+  time_horizon: string;
+  recency?: string;
+  confidence?: number;
+  headline: string;
+  source: string;
+  published_at: string;
+  days_away?: number;
+}
+
 export interface StockOpportunity {
   symbol: string;
   company_name: string;
