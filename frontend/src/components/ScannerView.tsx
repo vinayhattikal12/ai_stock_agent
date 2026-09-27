@@ -65,6 +65,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       .then((data) => {
         if (isMounted && data) {
           setHistoryList(data);
+          // If no scan result is loaded yet, automatically select the most recent archive
+          if (!scanResult && data.length > 0 && onSelectHistoricalScan) {
+            onSelectHistoricalScan(String(data[0].scan_date));
+          }
         }
       })
       .catch((err) => console.warn('Could not load scan history:', err));
@@ -536,6 +540,41 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             <Sparkles className="w-3 h-3" />
             <span>Run Fresh Live Scan</span>
           </button>
+        </div>
+      )}
+
+      {/* Empty / Initial State if No Scan Result Loaded Yet */}
+      {!scanResult && !isScanning && (
+        <div className="p-8 sm:p-12 rounded-2xl bg-background-cardLight dark:bg-background-cardDark border border-border-light dark:border-border-dark shadow-subtle text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 text-blue-500 flex items-center justify-center mx-auto">
+            <Sparkles className="w-8 h-8" />
+          </div>
+          <div className="max-w-md mx-auto space-y-2">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+              Ready for Multi-Cap Systematic Analysis
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+              Run a live quantitative scan across Large-Cap, Mid-Cap, and Small-Cap NSE equities with Upstox API live feeds, or click an archived scan above.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-wrap justify-center gap-3">
+            <button
+              onClick={onTriggerScan}
+              className="inline-flex items-center space-x-2 px-6 py-3 rounded-xl font-bold text-sm bg-blue-600 hover:bg-blue-500 text-white shadow-glow-blue transition-all"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Run Quantitative Scan Now</span>
+            </button>
+            {historyList.length > 0 && onSelectHistoricalScan && (
+              <button
+                onClick={() => onSelectHistoricalScan(String(historyList[0].scan_date))}
+                className="inline-flex items-center space-x-2 px-5 py-3 rounded-xl font-semibold text-sm bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-border-light dark:border-border-dark transition-all"
+              >
+                <History className="w-4 h-4 text-blue-500" />
+                <span>Load Latest Saved ({formatDateBadge(String(historyList[0].scan_date)).label})</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 

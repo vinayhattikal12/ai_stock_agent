@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import json
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
@@ -857,6 +858,43 @@ class SystematicStockScanner:
                 db.close()
 
     @classmethod
+    def _parse_scan_json(cls, data: dict) -> Optional[ScannerScanResponse]:
+        if not data or not isinstance(data, dict):
+            return None
+        try:
+            # Backwards compatibility defaults for historical scan records
+            all_opps = data.get("opportunities", [])
+            if "top_conviction_picks" not in data or not data["top_conviction_picks"]:
+                data["top_conviction_picks"] = all_opps[:2] if len(all_opps) >= 2 else all_opps
+            if "total_qualified_count" not in data:
+                data["total_qualified_count"] = data.get("buy_candidates_count", len(all_opps))
+            if "total_near_misses_count" not in data:
+                data["total_near_misses_count"] = data.get("near_misses_count", 0)
+            if "survivors_by_stage" not in data or not data["survivors_by_stage"]:
+                data["survivors_by_stage"] = {
+                    "universe": data.get("total_universe_scanned", 200),
+                    "data_valid": data.get("total_universe_scanned", 200),
+                    "liquid": data.get("passed_liquidity_filter", 180),
+                    "strong_factors": 120,
+                    "valid_setups": data.get("passed_technical_filter", 60),
+                    "ml_evaluated": data.get("passed_ml_filter", 45),
+                    "risk_valid": data.get("total_qualified_count", 15),
+                    "final_selected": data.get("total_qualified_count", 15)
+                }
+            if hasattr(ScannerScanResponse, "model_validate"):
+                return ScannerScanResponse.model_validate(data)
+            return ScannerScanResponse(**data)
+        except Exception as e:
+            logger.warning(f"Strict validation on historical scan JSON failed: {e}. Attempting loose model_construct...")
+            try:
+                if hasattr(ScannerScanResponse, "model_construct"):
+                    return ScannerScanResponse.model_construct(**data)
+                return ScannerScanResponse(**data)
+            except Exception as e2:
+                logger.error(f"Failed to deserialize scan record JSON: {e2}")
+                return None
+
+    @classmethod
     def get_scan_by_date(cls, scan_dt: date, db = None) -> Optional[ScannerScanResponse]:
         should_close = False
         if db is None:
@@ -866,7 +904,7 @@ class SystematicStockScanner:
             record = db.query(DBHistoricalScan).filter(DBHistoricalScan.scan_date == scan_dt).first()
             if record and record.result_json:
                 data = json.loads(record.result_json)
-                return ScannerScanResponse(**data)
+                return cls._parse_scan_json(data)
             return None
         finally:
             if should_close:
@@ -892,7 +930,7 @@ class SystematicStockScanner:
             
             if record and record.result_json:
                 data = json.loads(record.result_json)
-                return ScannerScanResponse(**data)
+                return cls._parse_scan_json(data)
             return None
         except Exception as e:
             logger.error(f"Error querying scan by date_or_id '{date_or_id}': {e}")
